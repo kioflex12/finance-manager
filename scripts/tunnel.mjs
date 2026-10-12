@@ -43,7 +43,8 @@ function connect() {
   );
   ssh.stdout.on('data', (chunk) => {
     const url = String(chunk).match(URL_PATTERN)?.at(-1);
-    if (url) publish(url).catch((err) => console.error('[tunnel]', err));
+    // бесплатный serveo показывает браузерам страницу-предупреждение; этот параметр ставит cookie и сразу ведёт на сайт
+    if (url) publish(`${url}/?serveo-skip-browser-warning=true`).catch((err) => console.error('[tunnel]', err));
   });
   ssh.on('exit', (code) => {
     console.error(`[tunnel] ssh завершился (${code}), переподключаюсь`);
