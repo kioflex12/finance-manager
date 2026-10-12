@@ -4,14 +4,25 @@ declare global {
       WebApp: {
         initData: string;
         initDataUnsafe: { start_param?: string };
+        colorScheme?: 'light' | 'dark';
         ready(): void;
         expand(): void;
         openTelegramLink(url: string): void;
-        HapticFeedback?: { notificationOccurred(type: 'success' | 'error'): void };
+        setHeaderColor?(color: string): void;
+        setBackgroundColor?(color: string): void;
+        disableVerticalSwipes?(): void;
+        onEvent?(event: 'themeChanged', handler: () => void): void;
+        BackButton?: { show(): void; hide(): void; onClick(cb: () => void): void; offClick(cb: () => void): void };
+        HapticFeedback?: {
+          notificationOccurred(type: 'success' | 'error'): void;
+          selectionChanged(): void;
+        };
       };
     };
   }
 }
+
+export const tg = window.Telegram?.WebApp;
 
 export interface Room {
   id: number;
@@ -41,20 +52,31 @@ export interface Operation {
 export interface Period {
   id: number;
   label: string;
+  startsAt: string;
+  endsAt: string;
   closedAt: string | null;
   total?: number;
+}
+
+export interface Stats {
+  total: number;
+  count: number;
+  byCategory: { category: Category | null; total: number; count: number }[];
+  byMember: { userId: number; name: string; total: number }[];
+}
+
+export interface Budget {
+  budget: number;
+  left: number;
+  daysLeft: number;
+  perDay: number;
 }
 
 export interface Overview {
   room: Room;
   period: Period | null;
-  stats: {
-    total: number;
-    count: number;
-    byCategory: { category: Category | null; total: number; count: number }[];
-    byMember: { userId: number; name: string; total: number }[];
-  } | null;
-  budget: { budget: number; left: number; daysLeft: number; perDay: number } | null;
+  stats: Stats | null;
+  budget: Budget | null;
 }
 
 export interface RoomView extends Overview {
@@ -83,7 +105,7 @@ export class ApiError extends Error {
 }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const initData = window.Telegram?.WebApp.initData;
+  const initData = tg?.initData;
   const res = await fetch(`/api${url}`, {
     method,
     headers: {
@@ -106,8 +128,12 @@ export const api = {
     call<{ room: Room }>('PATCH', `/rooms/${id}`, patch),
   periods: (id: number) => call<{ periods: Period[] }>('GET', `/rooms/${id}/periods`),
   startPeriod: (id: number) => call<unknown>('POST', `/rooms/${id}/periods`),
-  operations: (id: number, periodId: number, categoryId: number | null) =>
-    call<{ operations: Operation[] }>('GET', `/rooms/${id}/operations?periodId=${periodId}&categoryId=${categoryId ?? 'none'}`),
+  /** categoryId: undefined — все траты периода, null — без категории */
+  operations: (id: number, periodId: number, categoryId?: number | null) =>
+    call<{ operations: Operation[] }>(
+      'GET',
+      `/rooms/${id}/operations?periodId=${periodId}${categoryId === undefined ? '' : `&categoryId=${categoryId ?? 'none'}`}`,
+    ),
   add: (id: number, text: string) => call<Overview & { operations: Operation[] }>('POST', `/rooms/${id}/operations`, { text }),
   setCategory: (opId: number, categoryId: number) => call<{ operation: Operation }>('PATCH', `/operations/${opId}`, { categoryId }),
   remove: (opId: number) => call<unknown>('DELETE', `/operations/${opId}`),
@@ -117,4 +143,16 @@ export function money(kopecks: number): string {
   const rub = Math.trunc(kopecks / 100);
   const kop = Math.abs(Math.round(kopecks % 100));
   return `${String(rub).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}${kop ? ',' + String(kop).padStart(2, '0') : ''} ₽`;
+}
+
+const DAY_MS = 86_400_000;
+
+/** «Сегодня», «Вчера» или «10 октября» — заголовок дня в ленте трат. */
+export function dayLabel(iso: string, now = new Date()): string {
+  const date = new Date(iso);
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = Math.round((startOf(now) - startOf(date)) / DAY_MS);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Вчера';
+  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }

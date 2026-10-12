@@ -4,6 +4,7 @@ import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
+import { compress } from 'hono/compress';
 import { createApi } from './api.js';
 import { createBot, startJobs } from './bot.js';
 import { config } from './config.js';
@@ -25,6 +26,7 @@ const app: App = {
 if (!app.llm) console.warn('LLM_BASE_URL и LLM_MODEL не заданы: работает только быстрый разбор вида «400 продукты»');
 
 const http = new Hono();
+http.use(compress());
 http.route('/', createApi(app));
 if (existsSync(MINIAPP_DIST)) {
   const root = path.relative(process.cwd(), MINIAPP_DIST);
@@ -36,6 +38,12 @@ serve({ fetch: http.fetch, port: config.port }, () => console.log(`http://localh
 if (config.botToken) {
   const bot = createBot(app, createTranscriber());
   startJobs(app, bot);
+  // кнопка миниаппа слева от поля ввода в чате с ботом
+  if (config.webappUrl) {
+    await bot.api
+      .setChatMenuButton({ menu_button: { type: 'web_app', text: 'Трекер', web_app: { url: config.webappUrl } } })
+      .catch((err) => console.error('menu button failed', err));
+  }
   void bot.start({ onStart: (me) => console.log(`bot @${me.username} запущен`) });
 } else {
   console.warn('BOT_TOKEN не задан: бот и рассылка сводок выключены, работает только API');
