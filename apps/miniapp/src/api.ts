@@ -8,6 +8,7 @@ declare global {
         ready(): void;
         expand(): void;
         openTelegramLink(url: string): void;
+        showConfirm?(message: string, callback: (ok: boolean) => void): void;
         setHeaderColor?(color: string): void;
         setBackgroundColor?(color: string): void;
         disableVerticalSwipes?(): void;
@@ -24,9 +25,14 @@ declare global {
 
 export const tg = window.Telegram?.WebApp;
 
+export type RoomColor = 'violet' | 'blue' | 'teal' | 'green' | 'orange' | 'pink' | 'red' | 'graphite';
+
 export interface Room {
   id: number;
   name: string;
+  ownerId: number;
+  emoji: string | null;
+  color: RoomColor;
   periodKind: 'month' | 'days';
   periodDays: number;
   autoRenew: boolean;
@@ -45,6 +51,8 @@ export interface Operation {
   userName: string;
   amount: number;
   description: string;
+  /** позиция: общее название одинаковых трат («кофе» для «кофеёчек») */
+  item: string;
   category: Category | null;
   createdAt: string;
 }
@@ -84,7 +92,19 @@ export interface RoomView extends Overview {
   members: { id: number; name: string }[];
 }
 
+export interface RoomPatch {
+  name?: string;
+  budget?: number | null;
+  autoRenew?: boolean;
+  periodKind?: 'month' | 'days';
+  periodDays?: number;
+  emoji?: string | null;
+  color?: RoomColor;
+  active?: boolean;
+}
+
 export interface Me {
+  user: { id: number; name: string };
   activeRoomId: number;
   rooms: Room[];
   botUsername: string;
@@ -124,8 +144,10 @@ export const api = {
   join: (code: string) => call<{ room: Room }>('POST', '/join', { code }),
   room: (id: number, periodId?: number) => call<RoomView>('GET', `/rooms/${id}${periodId ? `?periodId=${periodId}` : ''}`),
   createRoom: (room: NewRoom) => call<{ room: Room }>('POST', '/rooms', room),
-  updateRoom: (id: number, patch: { budget?: number | null; autoRenew?: boolean; active?: boolean }) =>
-    call<{ room: Room }>('PATCH', `/rooms/${id}`, patch),
+  updateRoom: (id: number, patch: RoomPatch) => call<{ room: Room }>('PATCH', `/rooms/${id}`, patch),
+  /** владелец удаляет комнату, участник выходит из неё */
+  deleteRoom: (id: number) => call<{ activeRoomId: number; rooms: Room[] }>('DELETE', `/rooms/${id}`),
+  clearOperations: (id: number) => call<unknown>('DELETE', `/rooms/${id}/operations`),
   periods: (id: number) => call<{ periods: Period[] }>('GET', `/rooms/${id}/periods`),
   startPeriod: (id: number) => call<unknown>('POST', `/rooms/${id}/periods`),
   /** categoryId: undefined — все траты периода, null — без категории */
@@ -143,6 +165,14 @@ export function money(kopecks: number): string {
   const rub = Math.trunc(kopecks / 100);
   const kop = Math.abs(Math.round(kopecks % 100));
   return `${String(rub).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}${kop ? ',' + String(kop).padStart(2, '0') : ''} ₽`;
+}
+
+/** Подтверждение необратимого действия: системный диалог Telegram, вне его — браузерный. */
+export function confirmAction(message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (tg?.showConfirm) tg.showConfirm(message, resolve);
+    else resolve(window.confirm(message));
+  });
 }
 
 const DAY_MS = 86_400_000;

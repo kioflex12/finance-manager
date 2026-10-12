@@ -111,14 +111,41 @@ export function createApi(app: s.App): Hono<Env> {
     const user = c.get('user');
     const room = await memberRoom(user, c.req.param('roomId'));
     if (!room) return c.json({ error: 'not_found' }, 404);
-    const body = await c.req.json<{ name?: string; budget?: number | null; autoRenew?: boolean; active?: boolean }>();
+    const body = await c.req.json<s.RoomPatch & { active?: boolean }>();
     if (body.active) await s.setActiveRoom(app, user, room.id);
     const updated = await s.updateRoom(app, room.id, {
-      name: body.name,
+      name: typeof body.name === 'string' ? body.name : undefined,
       budget: body.budget === undefined ? undefined : toBudget(body.budget),
-      autoRenew: body.autoRenew,
+      autoRenew: typeof body.autoRenew === 'boolean' ? body.autoRenew : undefined,
+      periodKind: body.periodKind === 'days' || body.periodKind === 'month' ? body.periodKind : undefined,
+      periodDays: Number(body.periodDays) || undefined,
+      emoji: body.emoji === null || typeof body.emoji === 'string' ? body.emoji : undefined,
+      color: s.ROOM_COLORS.find((color) => color === body.color),
     });
     return c.json({ room: updated });
+  });
+
+  // владелец удаляет комнату целиком, остальные участники из неё выходят
+  api.delete('/rooms/:roomId', async (c) => {
+    const user = c.get('user');
+    const room = await memberRoom(user, c.req.param('roomId'));
+    if (!room) return c.json({ error: 'not_found' }, 404);
+    if (room.ownerId === user.id) await s.deleteRoom(app, room.id);
+    else await s.leaveRoom(app, room.id, user.id);
+    user.activeRoomId = user.activeRoomId === room.id ? null : user.activeRoomId;
+    const active = await s.ensureActiveRoom(app, user);
+    return c.json({ activeRoomId: active.id, rooms: await s.listRooms(app, user.id) });
+  });
+
+  // очистка трат текущего периода — только владелец: в общей комнате это данные всех участников
+  api.delete('/rooms/:roomId/operations', async (c) => {
+    const user = c.get('user');
+    const room = await memberRoom(user, c.req.param('roomId'));
+    if (!room) return c.json({ error: 'not_found' }, 404);
+    if (room.ownerId !== user.id) return c.json({ error: 'forbidden' }, 403);
+    const period = await s.currentPeriod(app, room.id);
+    if (period) await s.clearPeriod(app, period.id);
+    return c.json({ ok: true });
   });
 
   api.get('/rooms/:roomId/periods', async (c) => {

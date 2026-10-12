@@ -11,7 +11,8 @@ it('parseReply достаёт операции из чистого JSON, из ``
 });
 
 it('parseCategory', () => {
-  expect(parseCategory('{"category": "Транспорт"}')).toBe('Транспорт');
+  expect(parseCategory('{"category": "Транспорт"}')).toEqual({ category: 'Транспорт' });
+  expect(parseCategory('{"category": "Кафе и рестораны", "item": "кофе"}')).toEqual({ category: 'Кафе и рестораны', item: 'кофе' });
   expect(parseCategory('Транспорт')).toBeNull();
   expect(parseCategory('{"operations": []}')).toBeNull();
 });
@@ -28,6 +29,7 @@ it('шлёт запрос в /chat/completions с категориями и по
     text: 'двести пятьдесят на такси',
     categories: ['Транспорт', 'Другое'],
     hints: [{ description: 'яндекс', category: 'Транспорт' }],
+    items: ['такси', 'кофе'],
   });
 
   expect(ops).toEqual([{ amount: 250, description: 'такси', category: 'Транспорт' }]);
@@ -36,11 +38,12 @@ it('шлёт запрос в /chat/completions с категориями и по
   expect(seen!.body.model).toBe('m');
   expect(seen!.body.messages[1].content).toContain('Категории: Транспорт, Другое');
   expect(seen!.body.messages[1].content).toContain('яндекс → Транспорт');
+  expect(seen!.body.messages[1].content).toContain('Уже есть позиции: такси, кофе');
   expect(seen!.body.messages[1].content).toContain('двести пятьдесят на такси');
 });
 
 it('ошибка провайдера (например, лимит бесплатного тарифа) — исключение, а не пустой ответ', async () => {
   const limited = (async () => new Response('rate limit', { status: 429 })) as unknown as typeof fetch;
   const parser = createLlmParser({ baseUrl: 'https://llm.test/v1', apiKey: '', model: 'm' }, limited);
-  await expect(parser.parse({ text: 'x', categories: [], hints: [] })).rejects.toThrow('LLM 429');
+  await expect(parser.parse({ text: 'x', categories: [], hints: [], items: [] })).rejects.toThrow('LLM 429');
 });

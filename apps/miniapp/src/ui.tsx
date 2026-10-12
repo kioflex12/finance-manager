@@ -1,5 +1,31 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { money, tg, type Category, type Operation, type Stats } from './api';
+import { money, tg, type Category, type Operation, type Room, type RoomColor, type Stats } from './api';
+
+/** Цвета комнаты: пара для градиента (светлее → темнее). */
+export const ROOM_COLORS: Record<RoomColor, [string, string]> = {
+  violet: ['#7a28ff', '#4b2bd6'],
+  blue: ['#2f6df6', '#1d4ed8'],
+  teal: ['#0e9aa7', '#0b6f76'],
+  green: ['#1f9d55', '#15803d'],
+  orange: ['#f0731a', '#c2410c'],
+  pink: ['#e0457b', '#a61e4d'],
+  red: ['#e5484d', '#b91c1c'],
+  graphite: ['#52525b', '#18181b'],
+};
+
+export function roomVars(color: RoomColor): React.CSSProperties {
+  const [from, to] = ROOM_COLORS[color] ?? ROOM_COLORS.violet;
+  return { '--room-1': from, '--room-2': to } as React.CSSProperties;
+}
+
+/** Аватар комнаты: выбранный эмодзи или первая буква названия на цвете комнаты. */
+export function RoomAvatar({ room, size = 'small' }: { room: Pick<Room, 'name' | 'emoji' | 'color'>; size?: 'pill' | 'small' | 'large' }) {
+  return (
+    <span className={`avatar ${size}${room.emoji ? ' emoji' : ''}`} style={roomVars(room.color)}>
+      {room.emoji ?? room.name.trim().charAt(0).toUpperCase()}
+    </span>
+  );
+}
 
 const SERIES_SLOTS = 8;
 

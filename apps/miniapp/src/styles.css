@@ -7,12 +7,11 @@
   --muted: #898781;
   --hairline: #e1e0d9;
   --fill: #eceae4;
-  --accent: #6b3df0;
+  --room-1: #7a28ff;
+  --room-2: #4b2bd6;
   --accent-ink: #ffffff;
-  --accent-soft: #ece6ff;
   --danger: #d03b3b;
   --warning: #fab219;
-  --hero: linear-gradient(135deg, #7a28ff 0%, #4b2bd6 100%);
   --shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 8px 24px rgba(11, 11, 11, 0.06);
 
   /* категории: фиксированный порядок оттенков, проверенный на различимость */
@@ -36,9 +35,7 @@
   --muted: #898781;
   --hairline: #2c2c2a;
   --fill: #262624;
-  --accent: #8f72ff;
   --accent-ink: #ffffff;
-  --accent-soft: #2a2247;
   --danger: #e66767;
   --shadow: none;
 
@@ -77,6 +74,13 @@ button {
   background: none;
   padding: 0;
   cursor: pointer;
+  text-align: inherit;
+  transition: transform 0.1s, opacity 0.1s, background-color 0.1s;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  opacity: 0.8;
 }
 
 h1,
@@ -96,6 +100,21 @@ h1 {
 h2 {
   font-size: 20px;
   font-weight: 700;
+}
+
+/* Акцент берётся из цвета комнаты: --room-1/--room-2 задаются инлайном на .app и в превью настроек */
+.app,
+.form,
+.avatar,
+.swatches button {
+  --hero: linear-gradient(135deg, var(--room-1) 0%, var(--room-2) 100%);
+  --accent: var(--room-2);
+  --accent-soft: color-mix(in srgb, var(--room-1) 14%, var(--card));
+  --glow: color-mix(in srgb, var(--room-2) 32%, transparent);
+}
+
+:root[data-theme='dark'] :is(.app, .form, .avatar, .swatches button) {
+  --accent: color-mix(in srgb, var(--room-1) 62%, white);
 }
 
 .app {
@@ -191,6 +210,7 @@ h2 {
 }
 
 .members {
+  padding: 8px 4px;
   color: var(--muted);
   font-size: 13px;
 }
@@ -211,6 +231,21 @@ h2 {
 .avatar.small {
   width: 36px;
   height: 36px;
+}
+
+.avatar.large {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  font-size: 22px;
+}
+
+.avatar.emoji {
+  font-size: 17px;
+}
+
+.avatar.large.emoji {
+  font-size: 30px;
 }
 
 .avatar.ghost {
@@ -235,7 +270,27 @@ h2 {
   border-radius: 24px;
   background: var(--hero);
   color: #fff;
-  box-shadow: 0 12px 28px rgba(91, 43, 214, 0.28);
+  box-shadow: 0 12px 28px var(--glow);
+}
+
+.hero-period {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding: 5px 8px 5px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hero-total {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  color: #fff;
 }
 
 .hero-label {
@@ -244,7 +299,7 @@ h2 {
 }
 
 .hero-amount {
-  margin: 4px 0 2px;
+  margin: 2px 0;
   font-size: 42px;
   font-weight: 700;
   letter-spacing: -1px;
@@ -293,6 +348,7 @@ h2 {
   padding: 10px 12px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.14);
+  color: #fff;
 }
 
 .tile span {
@@ -364,6 +420,10 @@ h2 {
   border-top: 1px solid var(--hairline);
 }
 
+.rows li:not(.static):active {
+  opacity: 0.55;
+}
+
 .rows .static {
   cursor: default;
 }
@@ -419,6 +479,7 @@ h2 {
 }
 
 .empty-state {
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -485,7 +546,7 @@ h2 {
   font-size: 14px;
 }
 
-.period .bar {
+.bar {
   display: block;
   height: 6px;
   margin-top: 8px;
@@ -493,7 +554,7 @@ h2 {
   background: var(--fill);
 }
 
-.period .bar span {
+.bar span {
   display: block;
   height: 100%;
   min-width: 4px;
@@ -501,7 +562,7 @@ h2 {
   background: var(--muted);
 }
 
-.period .bar .current {
+.bar .current {
   background: var(--accent);
 }
 
@@ -516,12 +577,18 @@ h2 {
   color: var(--danger);
 }
 
-.link.block {
-  display: block;
-  width: 100%;
+.danger-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   margin-top: 18px;
-  padding: 12px;
-  text-align: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.danger-zone .link {
+  padding: 10px 16px;
 }
 
 .primary {
@@ -530,14 +597,10 @@ h2 {
   min-height: 50px;
   padding: 12px 18px;
   border-radius: 16px;
-  background: var(--accent);
+  background: var(--hero);
   color: var(--accent-ink);
   font-weight: 600;
-  transition: transform 0.1s;
-}
-
-.primary:active {
-  transform: scale(0.97);
+  text-align: center;
 }
 
 .primary:disabled {
@@ -619,7 +682,7 @@ input::placeholder {
 }
 
 .switch:checked {
-  background: var(--accent);
+  background: var(--room-2);
 }
 
 .switch:checked::after {
@@ -662,8 +725,12 @@ input::placeholder {
   font-size: 15px;
 }
 
+.chips.filter {
+  margin: -6px 0 4px;
+}
+
 .chip.active {
-  background: var(--accent);
+  background: var(--room-2);
   color: var(--accent-ink);
 }
 
@@ -725,12 +792,7 @@ input::placeholder {
   border-radius: 50%;
   background: var(--hero);
   color: #fff;
-  box-shadow: 0 8px 20px rgba(91, 43, 214, 0.4);
-  transition: transform 0.1s;
-}
-
-.fab:active {
-  transform: scale(0.94);
+  box-shadow: 0 8px 20px var(--glow);
 }
 
 .fab:disabled {
@@ -828,4 +890,137 @@ input::placeholder {
   text-align: center;
   font-weight: 500;
   animation: fade 0.2s ease-out;
+}
+
+/* ---------- позиции внутри категории ---------- */
+
+.card.item {
+  margin-top: 10px;
+  padding: 0 16px;
+}
+
+.item-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 68px;
+  padding: 12px 0;
+}
+
+.item-head b {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.item-head .title {
+  font-weight: 600;
+}
+
+.chev svg {
+  transition: transform 0.2s;
+}
+
+.chev.open svg {
+  transform: rotate(180deg);
+}
+
+.rows.nested {
+  border-top: 1px solid var(--hairline);
+  animation: fade 0.18s ease-out;
+}
+
+.rows.nested li {
+  min-height: 52px;
+}
+
+/* ---------- комната ---------- */
+
+.room-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.room-card .title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.pill-action {
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.person small {
+  font-size: 12px;
+}
+
+.look {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.field-label {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 6px;
+}
+
+.emoji-grid button {
+  display: grid;
+  place-items: center;
+  height: 44px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--fill);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.emoji-grid .active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.swatches button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--hero);
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+}
+
+.swatches .active {
+  outline-color: var(--ink);
+}
+
+.segmented button,
+.tab,
+.chip,
+.link {
+  text-align: center;
+}
+
+.rows.nested {
+  padding-bottom: 4px;
 }

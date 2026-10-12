@@ -16,7 +16,9 @@ const fakeLlm: ExpenseParser = {
   },
   async categorize(input) {
     llmCalls.push(input);
-    return input.text === 'такси' ? 'Транспорт' : 'Нет такой';
+    if (input.text === 'такси') return { category: 'Транспорт' };
+    if (input.text.startsWith('коф')) return { category: 'Кафе и рестораны', item: 'Кофе' };
+    return { category: 'Нет такой' };
   },
 };
 
@@ -77,6 +79,71 @@ describe('запись трат', () => {
     const { user, room } = await setup();
     expect((await s.addFromText(app, room, user, 'четыреста на продукты')).status).toBe('not_understood');
     expect((await s.addFromText(app, room, user, '400 продукты')).status).toBe('ok');
+  });
+});
+
+describe('позиции внутри категории', () => {
+  it('разные написания одной траты складываются в одну позицию, и она запоминается', async () => {
+    const { user, room } = await setup();
+    for (const text of ['кофе 400', 'кофеёчек 400']) {
+      const res = await s.addFromText(app, room, user, text);
+      if (res.status !== 'ok') throw new Error(res.status);
+      await s.categorizePending(app, res.pendingOpId!);
+    }
+    // модели передаются уже существующие позиции, чтобы она переиспользовала названия
+    expect(llmCalls.at(-1)?.items).toContain('кофе');
+
+    const again = await s.addFromText(app, room, user, 'кофеёчек 150');
+    if (again.status !== 'ok') throw new Error(again.status);
+    expect(again.pendingOpId).toBeUndefined();
+
+    const ops = await s.listOperations(app, (await s.currentPeriod(app, room.id))!.id);
+    expect(ops.map((o) => [o.description, o.item])).toEqual([
+      ['кофеёчек', 'кофе'],
+      ['кофеёчек', 'кофе'],
+      ['кофе', 'кофе'],
+    ]);
+  });
+
+  it('без ответа модели позиция — само описание', async () => {
+    app.llm = null;
+    const { user, room } = await setup();
+    const res = await s.addFromText(app, room, user, '300 Шаурма!');
+    if (res.status !== 'ok') throw new Error(res.status);
+    expect((await s.categorizePending(app, res.pendingOpId!))?.item).toBe('шаурма');
+  });
+});
+
+describe('настройки комнаты', () => {
+  it('оформление и период меняются, период — со следующего', async () => {
+    const { room } = await setup();
+    const before = (await s.currentPeriod(app, room.id))!;
+    const updated = await s.updateRoom(app, room.id, { name: 'Дом', emoji: '🏠', color: 'green', periodKind: 'days', periodDays: 7 });
+    expect(updated).toMatchObject({ name: 'Дом', emoji: '🏠', color: 'green', periodKind: 'days', periodDays: 7, autoRenew: true });
+    expect((await s.currentPeriod(app, room.id))!.endsAt).toEqual(before.endsAt);
+
+    await s.closeDuePeriods(app, before.endsAt);
+    const next = (await s.currentPeriod(app, room.id))!;
+    expect(next.endsAt.getTime() - next.startsAt.getTime()).toBe(7 * 86_400_000);
+    expect((await s.updateRoom(app, room.id, { emoji: null })).emoji).toBeNull();
+  });
+
+  it('очистка трат оставляет выученное, удаление комнаты убирает всё', async () => {
+    const { user, room } = await setup();
+    const res = await s.addFromText(app, room, user, '250 такси');
+    if (res.status !== 'ok') throw new Error(res.status);
+    await s.categorizePending(app, res.pendingOpId!);
+    const period = (await s.currentPeriod(app, room.id))!;
+
+    await s.clearPeriod(app, period.id);
+    expect((await s.periodStats(app, period.id)).count).toBe(0);
+    const again = await s.addFromText(app, room, user, 'такси 100');
+    expect(again.status === 'ok' && again.ops[0]?.category?.name).toBe('Транспорт');
+
+    await s.deleteRoom(app, room.id);
+    expect(await s.getRoom(app, room.id)).toBeNull();
+    const fresh = await s.ensureActiveRoom(app, (await s.ensureUser(app, { id: 1, name: 'Костя' })));
+    expect(fresh.id).not.toBe(room.id);
   });
 });
 

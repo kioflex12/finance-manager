@@ -93,6 +93,28 @@ describe('API', () => {
     expect(shared.members).toHaveLength(2);
   });
 
+  it('удаление и очистка: владелец удаляет и чистит, участник только выходит', async () => {
+    const roomId = (await (await call(1, 'GET', '/me')).json()).activeRoomId;
+    const added = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '400 продукты' })).json();
+    await call(2, 'POST', '/join', { code: added.room.inviteCode });
+
+    expect((await call(2, 'DELETE', `/rooms/${roomId}/operations`)).status).toBe(403);
+    expect((await call(1, 'DELETE', `/rooms/${roomId}/operations`)).status).toBe(200);
+    expect((await (await call(1, 'GET', `/rooms/${roomId}`)).json()).stats.total).toBe(0);
+
+    // участник выходит — комната остаётся у владельца
+    const left = await (await call(2, 'DELETE', `/rooms/${roomId}`)).json();
+    expect(left.rooms.some((r: { id: number }) => r.id === roomId)).toBe(false);
+    expect((await call(1, 'GET', `/rooms/${roomId}`)).status).toBe(200);
+
+    const patched = await (await call(1, 'PATCH', `/rooms/${roomId}`, { emoji: '🏠', color: 'нет-такого', name: 'Дом' })).json();
+    expect(patched.room).toMatchObject({ emoji: '🏠', color: 'violet', name: 'Дом' });
+
+    const gone = await (await call(1, 'DELETE', `/rooms/${roomId}`)).json();
+    expect(gone.activeRoomId).not.toBe(roomId);
+    expect((await call(1, 'GET', `/rooms/${roomId}`)).status).toBe(404);
+  });
+
   it('комната на срок: создание и история периодов', async () => {
     const created = await (
       await call(1, 'POST', '/rooms', { name: 'Отпуск', periodKind: 'days', periodDays: 10, autoRenew: false, budget: 1000000 })

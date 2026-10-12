@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   api,
   ApiError,
+  confirmAction,
   dayLabel,
   money,
   tg,
@@ -11,17 +12,34 @@ import {
   type Operation,
   type Overview,
   type Period,
+  type Room,
+  type RoomColor,
   type RoomView,
 } from './api';
-import { Breakdown, CategoryBadge, categoryColor, Icon, Meter, OperationRow, share, Sheet, useBack } from './ui';
+import {
+  Breakdown,
+  CategoryBadge,
+  categoryColor,
+  Icon,
+  Meter,
+  OperationRow,
+  ROOM_COLORS,
+  RoomAvatar,
+  roomVars,
+  share,
+  Sheet,
+  useBack,
+} from './ui';
 
 type Tab = 'home' | 'ops' | 'history' | 'room';
 type Fail = (err: unknown) => void;
+type ColorOf = (c: Category | null) => string;
 
 const ERRORS: Record<string, string> = {
   not_understood: 'Не нашёл сумму. Например: «400 продукты»',
   no_period: 'Срок комнаты закончился — начните новый период',
   unauthorized: 'Откройте приложение из Telegram',
+  forbidden: 'Это может сделать только владелец комнаты',
 };
 
 const DAY_MS = 86_400_000;
@@ -43,8 +61,11 @@ export function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
   // undefined — экран категории закрыт; null — «без категории»
   const [category, setCategory] = useState<Category | null | undefined>();
+  // фильтр ленты трат по участнику общей комнаты
+  const [memberFilter, setMemberFilter] = useState<string | null>(null);
   const [adding, setAdding] = useState(location.hash === '#add');
   const [creating, setCreating] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [editing, setEditing] = useState<Operation | null>(null);
   const [error, setError] = useState('');
 
@@ -87,11 +108,17 @@ export function App() {
 
   const refresh = useCallback(() => void reload().catch(fail), [reload, fail]);
 
+  function go(next: Tab) {
+    tg?.HapticFeedback?.selectionChanged();
+    setCategory(undefined);
+    setTab(next);
+  }
+
   async function openRoom(id: number) {
     setRoomId(id);
     setPeriodId(undefined);
-    setCategory(undefined);
-    setTab('home');
+    setMemberFilter(null);
+    go('home');
     await api.updateRoom(id, { active: true }).catch(fail);
   }
 
@@ -101,11 +128,12 @@ export function App() {
 
   const { room, period } = view;
   const viewingHistory = periodId !== undefined;
-  const colorOf = (c: Category | null) => categoryColor(c, view.categories);
+  const colorOf: ColorOf = (c) => categoryColor(c, view.categories);
   const shared = view.members.length > 1;
+  const onMain = category === undefined;
 
   return (
-    <div className="app">
+    <div className="app" style={roomVars(room.color)}>
       {category !== undefined ? (
         <CategoryScreen
           category={category}
@@ -118,12 +146,16 @@ export function App() {
       ) : (
         <>
           <header className="topbar">
-            <button className="room-pill" onClick={() => setTab('room')}>
-              <span className="avatar">{room.name.trim().charAt(0).toUpperCase()}</span>
+            <button className="room-pill" onClick={() => go('room')}>
+              <RoomAvatar room={room} size="pill" />
               <span className="room-name">{room.name}</span>
               <Icon name="chevron" size={16} />
             </button>
-            {shared && <span className="members">{view.members.length} участн.</span>}
+            {shared && (
+              <button className="members" onClick={() => go('room')}>
+                {view.members.length} участн.
+              </button>
+            )}
           </header>
 
           {tab === 'home' && (
@@ -135,38 +167,58 @@ export function App() {
               shared={shared}
               onOpenCategory={setCategory}
               onEdit={setEditing}
-              onShowAll={() => setTab('ops')}
+              onShowAll={(member) => {
+                setMemberFilter(member ?? null);
+                go('ops');
+              }}
+              onOpenHistory={() => go('history')}
               onBackToCurrent={() => setPeriodId(undefined)}
-              onSetBudget={() => setTab('room')}
+              onSetBudget={() => setConfiguring(true)}
+              onAdd={() => setAdding(true)}
               onStartPeriod={() => api.startPeriod(room.id).then(refresh).catch(fail)}
             />
           )}
-          {tab === 'ops' && <Operations operations={operations} colorOf={colorOf} shared={shared} onEdit={setEditing} />}
+          {tab === 'ops' && (
+            <Operations
+              operations={operations}
+              members={shared ? view.members.map((m) => m.name) : []}
+              member={memberFilter}
+              onMember={setMemberFilter}
+              colorOf={colorOf}
+              shared={shared}
+              onEdit={setEditing}
+            />
+          )}
           {tab === 'history' && (
             <History
               roomId={room.id}
-              currentId={period?.id}
               onOpen={(p) => {
                 setPeriodId(p.closedAt ? p.id : undefined);
-                setTab('home');
+                go('home');
               }}
               fail={fail}
             />
           )}
           {tab === 'room' && (
-            <RoomTab me={me} view={view} onOpen={openRoom} onNew={() => setCreating(true)} onReload={refresh} fail={fail} />
+            <RoomTab
+              me={me}
+              view={view}
+              onOpen={openRoom}
+              onNew={() => setCreating(true)}
+              onConfigure={() => setConfiguring(true)}
+            />
           )}
         </>
       )}
 
       <nav className="tabbar">
-        <TabButton icon="home" label="Обзор" active={tab === 'home' && category === undefined} onClick={() => (setCategory(undefined), setTab('home'))} />
-        <TabButton icon="list" label="Траты" active={tab === 'ops' && category === undefined} onClick={() => (setCategory(undefined), setTab('ops'))} />
+        <TabButton icon="home" label="Обзор" active={tab === 'home' && onMain} onClick={() => go('home')} />
+        <TabButton icon="list" label="Траты" active={tab === 'ops' && onMain} onClick={() => go('ops')} />
         <button className="fab" aria-label="Добавить трату" disabled={!period || viewingHistory} onClick={() => setAdding(true)}>
           <Icon name="plus" size={28} />
         </button>
-        <TabButton icon="clock" label="История" active={tab === 'history' && category === undefined} onClick={() => (setCategory(undefined), setTab('history'))} />
-        <TabButton icon="users" label="Комната" active={tab === 'room' && category === undefined} onClick={() => (setCategory(undefined), setTab('room'))} />
+        <TabButton icon="clock" label="История" active={tab === 'history' && onMain} onClick={() => go('history')} />
+        <TabButton icon="users" label="Комната" active={tab === 'room' && onMain} onClick={() => go('room')} />
       </nav>
 
       {adding && (
@@ -178,12 +230,30 @@ export function App() {
             setView({ ...view, ...next });
             setOperations((list) => [...added, ...list]);
           }}
+          onEdit={setEditing}
           onUndone={refresh}
           fail={fail}
         />
       )}
-      {editing && (
-        <EditSheet op={editing} categories={view.categories} onClose={() => setEditing(null)} onChanged={refresh} fail={fail} />
+      {configuring && (
+        <RoomSettingsSheet
+          room={room}
+          isOwner={room.ownerId === me.user.id}
+          onClose={() => setConfiguring(false)}
+          onSaved={(updated) => {
+            setMe({ ...me, rooms: me.rooms.map((r) => (r.id === updated.id ? updated : r)) });
+            refresh();
+          }}
+          onCleared={refresh}
+          onRemoved={(next) => {
+            setMe({ ...me, ...next });
+            setConfiguring(false);
+            setPeriodId(undefined);
+            setRoomId(next.activeRoomId);
+            go('home');
+          }}
+          fail={fail}
+        />
       )}
       {creating && (
         <NewRoomSheet
@@ -196,6 +266,9 @@ export function App() {
           }}
           fail={fail}
         />
+      )}
+      {editing && (
+        <EditSheet op={editing} categories={view.categories} onClose={() => setEditing(null)} onChanged={refresh} fail={fail} />
       )}
       {error && <div className="toast">{error}</div>}
     </div>
@@ -215,13 +288,15 @@ function Home(props: {
   view: RoomView;
   operations: Operation[];
   viewingHistory: boolean;
-  colorOf: (c: Category | null) => string;
+  colorOf: ColorOf;
   shared: boolean;
   onOpenCategory: (category: Category | null) => void;
   onEdit: (op: Operation) => void;
-  onShowAll: () => void;
+  onShowAll: (member?: string) => void;
+  onOpenHistory: () => void;
   onBackToCurrent: () => void;
   onSetBudget: () => void;
+  onAdd: () => void;
   onStartPeriod: () => void;
 }) {
   const { view, operations, viewingHistory, colorOf } = props;
@@ -248,26 +323,33 @@ function Home(props: {
   return (
     <main className="page">
       <section className="hero">
-        <div className="hero-label">
-          {viewingHistory ? 'Потрачено за период' : 'Потрачено'} · {period.label}
-        </div>
-        <div className="hero-amount">{money(stats.total)}</div>
+        <button className="hero-period" onClick={props.onOpenHistory}>
+          {period.label} <Icon name="right" size={14} />
+        </button>
+        <button className="hero-total" onClick={() => props.onShowAll()}>
+          <span className="hero-label">{viewingHistory ? 'Потрачено за период' : 'Потрачено'}</span>
+          <span className="hero-amount">{money(stats.total)}</span>
+        </button>
         {budget ? (
           <>
             <Meter spent={stats.total} limit={budget.budget} />
             <div className="tiles">
               {budget.left >= 0 ? (
-                <Tile label="Осталось" value={money(budget.left)} />
+                <Tile label="Осталось" value={money(budget.left)} onClick={props.onSetBudget} />
               ) : (
-                <Tile label="Перерасход" value={money(-budget.left)} alert />
+                <Tile label="Перерасход" value={money(-budget.left)} alert onClick={props.onSetBudget} />
               )}
-              <Tile label={budget.left >= 0 ? 'Можно в день' : 'Дней до конца'} value={budget.left >= 0 ? money(budget.perDay) : String(budget.daysLeft)} />
+              <Tile
+                label={budget.left >= 0 ? 'Можно в день' : 'Дней до конца'}
+                value={budget.left >= 0 ? money(budget.perDay) : String(budget.daysLeft)}
+                onClick={props.onSetBudget}
+              />
             </div>
           </>
         ) : (
           <div className="tiles">
-            <Tile label="Трат" value={String(stats.count)} />
-            <Tile label="В среднем в день" value={money(Math.round(stats.total / daysPassed / 100) * 100)} />
+            <Tile label="Трат" value={String(stats.count)} onClick={() => props.onShowAll()} />
+            <Tile label="В среднем в день" value={money(Math.round(stats.total / daysPassed / 100) * 100)} onClick={() => props.onShowAll()} />
           </div>
         )}
         {viewingHistory ? (
@@ -284,11 +366,11 @@ function Home(props: {
       </section>
 
       {stats.count === 0 ? (
-        <div className="card empty-state">
+        <button className="card empty-state pressable" disabled={viewingHistory} onClick={props.onAdd}>
           <div className="big-emoji">🧾</div>
           <h2>Пока нет трат</h2>
-          <p className="muted">Нажмите «+» и напишите, например, «400 продукты».</p>
-        </div>
+          <p className="muted">Нажмите сюда или на «+» и напишите, например, «400 продукты».</p>
+        </button>
       ) : (
         <>
           <h3 className="section">Категории</h3>
@@ -315,11 +397,9 @@ function Home(props: {
 
           <div className="section-row">
             <h3 className="section">Последние траты</h3>
-            {operations.length > RECENT_COUNT && (
-              <button className="link" onClick={props.onShowAll}>
-                Все
-              </button>
-            )}
+            <button className="link" onClick={() => props.onShowAll()}>
+              Все
+            </button>
           </div>
           <ul className="card rows">
             {operations.slice(0, RECENT_COUNT).map((op) => (
@@ -332,13 +412,16 @@ function Home(props: {
               <h3 className="section">Участники</h3>
               <ul className="card rows">
                 {stats.byMember.map((m) => (
-                  <li key={m.userId} className="static">
+                  <li key={m.userId} onClick={() => props.onShowAll(m.name)}>
                     <span className="avatar small">{m.name.charAt(0).toUpperCase()}</span>
                     <span className="grow">
                       <span className="title">{m.name}</span>
                       <small>{share(m.total, stats.total)}</small>
                     </span>
                     <b>{money(m.total)}</b>
+                    <span className="chev">
+                      <Icon name="right" size={16} />
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -350,14 +433,14 @@ function Home(props: {
   );
 }
 
-function Tile({ label, value, alert }: { label: string; value: string; alert?: boolean }) {
+function Tile({ label, value, alert, onClick }: { label: string; value: string; alert?: boolean; onClick: () => void }) {
   return (
-    <div className={alert ? 'tile alert' : 'tile'}>
+    <button className={alert ? 'tile alert' : 'tile'} onClick={onClick}>
       <span>
         {alert && <Icon name="alert" size={14} />} {label}
       </span>
       <b>{value}</b>
-    </div>
+    </button>
   );
 }
 
@@ -369,8 +452,10 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
+const sum = (operations: Operation[]) => operations.reduce((total, op) => total + op.amount, 0);
+
 /** Лента трат, сгруппированная по дням, с суммой за день. */
-function DayGroups(props: { operations: Operation[]; colorOf: (c: Category | null) => string; shared: boolean; onEdit: (op: Operation) => void }) {
+function DayGroups(props: { operations: Operation[]; colorOf: ColorOf; shared: boolean; onEdit: (op: Operation) => void }) {
   const groups: { label: string; items: Operation[] }[] = [];
   for (const op of props.operations) {
     const label = dayLabel(op.createdAt);
@@ -384,7 +469,7 @@ function DayGroups(props: { operations: Operation[]; colorOf: (c: Category | nul
         <section key={group.label}>
           <div className="section-row">
             <h3 className="section">{group.label}</h3>
-            <span className="muted">{money(group.items.reduce((sum, op) => sum + op.amount, 0))}</span>
+            <span className="muted">{money(sum(group.items))}</span>
           </div>
           <ul className="card rows">
             {group.items.map((op) => (
@@ -397,12 +482,35 @@ function DayGroups(props: { operations: Operation[]; colorOf: (c: Category | nul
   );
 }
 
-function Operations(props: { operations: Operation[]; colorOf: (c: Category | null) => string; shared: boolean; onEdit: (op: Operation) => void }) {
+function Operations(props: {
+  operations: Operation[];
+  /** имена участников для фильтра; пусто в личной комнате */
+  members: string[];
+  member: string | null;
+  onMember: (member: string | null) => void;
+  colorOf: ColorOf;
+  shared: boolean;
+  onEdit: (op: Operation) => void;
+}) {
+  const { member } = props;
+  const operations = member ? props.operations.filter((op) => op.userName === member) : props.operations;
   return (
     <main className="page">
       <h1>Траты</h1>
-      {props.operations.length ? (
-        <DayGroups {...props} />
+      {props.members.length > 0 && (
+        <div className="chips filter">
+          <button className={member === null ? 'chip active' : 'chip'} onClick={() => props.onMember(null)}>
+            Все
+          </button>
+          {props.members.map((name) => (
+            <button key={name} className={member === name ? 'chip active' : 'chip'} onClick={() => props.onMember(name)}>
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+      {operations.length ? (
+        <DayGroups operations={operations} colorOf={props.colorOf} shared={props.shared} onEdit={props.onEdit} />
       ) : (
         <div className="card empty-state">
           <div className="big-emoji">🧾</div>
@@ -413,6 +521,7 @@ function Operations(props: { operations: Operation[]; colorOf: (c: Category | nu
   );
 }
 
+/** Категория изнутри: траты сложены по позициям («кофе» — 2 траты — 800 ₽), позиция раскрывается в список. */
 function CategoryScreen(props: {
   category: Category | null;
   operations: Operation[];
@@ -422,7 +531,14 @@ function CategoryScreen(props: {
   onEdit: (op: Operation) => void;
 }) {
   const { category, operations } = props;
+  const [open, setOpen] = useState<string | null>(null);
   useBack(props.onBack);
+
+  const byItem = new Map<string, Operation[]>();
+  for (const op of operations) byItem.set(op.item, [...(byItem.get(op.item) ?? []), op]);
+  const items = [...byItem.entries()].map(([name, list]) => ({ name, list, total: sum(list) })).sort((a, b) => b.total - a.total);
+  const total = sum(operations);
+
   return (
     <main className="page">
       <header className="topbar">
@@ -435,23 +551,63 @@ function CategoryScreen(props: {
         <div>
           <h1>{category?.name ?? 'Без категории'}</h1>
           <span className="muted">
-            {money(operations.reduce((sum, op) => sum + op.amount, 0))} · {operations.length}{' '}
-            {plural(operations.length, 'трата', 'траты', 'трат')}
+            {money(total)} · {operations.length} {plural(operations.length, 'трата', 'траты', 'трат')}
           </span>
         </div>
       </div>
-      {operations.length ? (
-        <DayGroups operations={operations} colorOf={() => props.color} shared={props.shared} onEdit={props.onEdit} />
-      ) : (
+
+      {items.length === 0 && (
         <div className="card empty-state">
           <p className="muted">Здесь больше ничего нет.</p>
         </div>
       )}
+      {items.map((item) => (
+        <div key={item.name} className="card item">
+          <button
+            className="item-head"
+            aria-expanded={open === item.name}
+            onClick={() => {
+              tg?.HapticFeedback?.selectionChanged();
+              setOpen(open === item.name ? null : item.name);
+            }}
+          >
+            <span className="grow">
+              <span className="title">{item.name}</span>
+              <small>
+                {item.list.length} {plural(item.list.length, 'трата', 'траты', 'трат')} · {share(item.total, total)}
+              </small>
+              <span className="bar">
+                <span style={{ width: `${(item.total / (items[0]?.total || 1)) * 100}%`, background: props.color }} />
+              </span>
+            </span>
+            <b>{money(item.total)}</b>
+            <span className={open === item.name ? 'chev open' : 'chev'}>
+              <Icon name="chevron" size={18} />
+            </span>
+          </button>
+          {open === item.name && (
+            <ul className="rows nested">
+              {item.list.map((op) => (
+                <li key={op.id} onClick={() => props.onEdit(op)}>
+                  <span className="grow">
+                    <span className="title">{op.description}</span>
+                    <small>
+                      {dayLabel(op.createdAt)}, {new Date(op.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                      {props.shared && ` · ${op.userName}`}
+                    </small>
+                  </span>
+                  <b>{money(op.amount)}</b>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
     </main>
   );
 }
 
-function History(props: { roomId: number; currentId: number | undefined; onOpen: (period: Period) => void; fail: Fail }) {
+function History(props: { roomId: number; onOpen: (period: Period) => void; fail: Fail }) {
   const { roomId, fail } = props;
   const [periods, setPeriods] = useState<Period[] | null>(null);
   useEffect(() => {
@@ -468,7 +624,7 @@ function History(props: { roomId: number; currentId: number | undefined; onOpen:
       <h1>История</h1>
       <ul className="card rows">
         {periods?.map((p) => (
-          <li key={p.id} className="period" onClick={() => props.onOpen(p)}>
+          <li key={p.id} onClick={() => props.onOpen(p)}>
             <span className="grow">
               <span className="title">{p.label}</span>
               <small>{p.closedAt ? 'завершён' : 'идёт сейчас'}</small>
@@ -477,6 +633,9 @@ function History(props: { roomId: number; currentId: number | undefined; onOpen:
               </span>
             </span>
             <b>{money(p.total ?? 0)}</b>
+            <span className="chev">
+              <Icon name="right" size={16} />
+            </span>
           </li>
         ))}
       </ul>
@@ -485,25 +644,62 @@ function History(props: { roomId: number; currentId: number | undefined; onOpen:
   );
 }
 
-function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; onNew: () => void; onReload: () => void; fail: Fail }) {
-  const { me, view, fail } = props;
-  const { room } = view;
-  const [budget, setBudget] = useState(room.budget ? String(room.budget / 100) : '');
-  const invite = me.botUsername ? `https://t.me/${me.botUsername}?start=join_${room.inviteCode}` : '';
+function periodText(room: Room): string {
+  return room.periodKind === 'month' ? 'ежемесячная' : `на ${room.periodDays} дн.`;
+}
 
-  const save = (patch: { budget?: number | null; autoRenew?: boolean }) =>
-    api.updateRoom(room.id, patch).then(props.onReload).catch(fail);
+function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; onNew: () => void; onConfigure: () => void }) {
+  const { me, view } = props;
+  const { room } = view;
+  const invite = me.botUsername ? `https://t.me/${me.botUsername}?start=join_${room.inviteCode}` : '';
 
   return (
     <main className="page">
-      <h1>Комнаты</h1>
+      <h1>Комната</h1>
+      <button className="card room-card pressable" onClick={props.onConfigure}>
+        <RoomAvatar room={room} size="large" />
+        <span className="grow">
+          <span className="title">{room.name}</span>
+          <small>
+            {periodText(room)} · {room.budget ? `бюджет ${money(room.budget)}` : 'без бюджета'}
+          </small>
+        </span>
+        <span className="pill-action">Настроить</span>
+      </button>
+
+      <h3 className="section">Участники</h3>
+      <div className="card form">
+        <div className="people">
+          {view.members.map((m) => (
+            <span key={m.id} className="person">
+              <span className="avatar small">{m.name.charAt(0).toUpperCase()}</span>
+              {m.name}
+              {m.id === room.ownerId && <small className="muted">владелец</small>}
+            </span>
+          ))}
+        </div>
+        {invite && (
+          <button
+            className="primary"
+            onClick={() =>
+              tg?.openTelegramLink(
+                `https://t.me/share/url?url=${encodeURIComponent(invite)}&text=${encodeURIComponent(`Давай вести траты вместе: «${room.name}»`)}`,
+              )
+            }
+          >
+            Пригласить в комнату
+          </button>
+        )}
+      </div>
+
+      <h3 className="section">Все комнаты</h3>
       <ul className="card rows">
         {me.rooms.map((r) => (
           <li key={r.id} onClick={() => props.onOpen(r.id)}>
-            <span className="avatar small">{r.name.trim().charAt(0).toUpperCase()}</span>
+            <RoomAvatar room={r.id === room.id ? room : r} />
             <span className="grow">
-              <span className="title">{r.name}</span>
-              <small>{r.periodKind === 'month' ? 'ежемесячная' : `на ${r.periodDays} дн.`}</small>
+              <span className="title">{r.id === room.id ? room.name : r.name}</span>
+              <small>{periodText(r.id === room.id ? room : r)}</small>
             </span>
             {r.id === room.id && (
               <span className="current-mark">
@@ -521,49 +717,154 @@ function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; 
           </span>
         </li>
       </ul>
+    </main>
+  );
+}
 
-      <h3 className="section">Настройки · {room.name}</h3>
-      <div className="card form">
+const ROOM_EMOJI = ['🏠', '👨‍👩‍👧', '💑', '✈️', '🏖', '🚗', '🎉', '🛒', '🐶', '🎓', '💼', '🏗', '🎁', '🍽', '💊', '⚽', '🎮', '💰'];
+
+function RoomSettingsSheet(props: {
+  room: Room;
+  isOwner: boolean;
+  onClose: () => void;
+  onSaved: (room: Room) => void;
+  onCleared: () => void;
+  onRemoved: (next: { activeRoomId: number; rooms: Room[] }) => void;
+  fail: Fail;
+}) {
+  const { room, fail } = props;
+  const [name, setName] = useState(room.name);
+  const [emoji, setEmoji] = useState(room.emoji);
+  const [color, setColor] = useState<RoomColor>(room.color);
+  const [kind, setKind] = useState(room.periodKind);
+  const [days, setDays] = useState(String(room.periodDays));
+  const [budget, setBudget] = useState(room.budget ? String(room.budget / 100) : '');
+  const [autoRenew, setAutoRenew] = useState(room.autoRenew);
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const updated = await api.updateRoom(room.id, {
+        name,
+        emoji,
+        color,
+        periodKind: kind,
+        periodDays: Number(days) || room.periodDays,
+        budget: budget ? Number(budget) * 100 : null,
+        autoRenew,
+      });
+      tg?.HapticFeedback?.notificationOccurred('success');
+      props.onSaved(updated.room);
+      props.onClose();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!(await confirmAction('Удалить все траты текущего периода? Отменить это нельзя.'))) return;
+    await api.clearOperations(room.id).then(props.onCleared).then(props.onClose).catch(fail);
+  }
+
+  async function remove() {
+    const question = props.isOwner
+      ? `Удалить комнату «${room.name}» со всеми тратами и историей? Отменить это нельзя.`
+      : `Выйти из комнаты «${room.name}»?`;
+    if (!(await confirmAction(question))) return;
+    await api.deleteRoom(room.id).then(props.onRemoved).catch(fail);
+  }
+
+  const periodChanged = kind !== room.periodKind || (kind === 'days' && Number(days) !== room.periodDays);
+
+  return (
+    <Sheet title="Настройки комнаты" onClose={props.onClose}>
+      <form className="form" onSubmit={save} style={roomVars(color)}>
+        <div className="look">
+          <RoomAvatar room={{ name: name || room.name, emoji, color }} size="large" />
+          <label className="grow">
+            Название
+            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} />
+          </label>
+        </div>
+
+        <div>
+          <div className="field-label">Аватар</div>
+          <div className="emoji-grid">
+            <button type="button" className={emoji === null ? 'active' : ''} onClick={() => setEmoji(null)}>
+              {(name || room.name).trim().charAt(0).toUpperCase()}
+            </button>
+            {ROOM_EMOJI.map((value) => (
+              <button type="button" key={value} className={emoji === value ? 'active' : ''} onClick={() => setEmoji(value)}>
+                {value}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="field-label">Цвет</div>
+          <div className="swatches">
+            {(Object.keys(ROOM_COLORS) as RoomColor[]).map((value) => (
+              <button
+                type="button"
+                key={value}
+                aria-label={value}
+                className={color === value ? 'active' : ''}
+                style={roomVars(value)}
+                onClick={() => setColor(value)}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="field-label">Период</div>
+          <div className="segmented">
+            <button type="button" className={kind === 'month' ? 'active' : ''} onClick={() => setKind('month')}>
+              Месяц
+            </button>
+            <button type="button" className={kind === 'days' ? 'active' : ''} onClick={() => setKind('days')}>
+              Срок в днях
+            </button>
+          </div>
+        </div>
+        {kind === 'days' && (
+          <label>
+            Сколько дней
+            <input inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value.replace(/\D/g, ''))} />
+          </label>
+        )}
+        {periodChanged && <p className="muted">Текущий период дойдёт до конца, новая длина начнёт действовать со следующего.</p>}
+
         <label>
           Бюджет на период, ₽
-          <input
-            inputMode="numeric"
-            value={budget}
-            placeholder="без бюджета"
-            onChange={(e) => setBudget(e.target.value.replace(/\D/g, ''))}
-            onBlur={() => save({ budget: budget ? Number(budget) * 100 : null })}
-          />
+          <input inputMode="numeric" value={budget} placeholder="без бюджета" onChange={(e) => setBudget(e.target.value.replace(/\D/g, ''))} />
         </label>
         <label className="switch-row">
           <span>Автоматически начинать новый период</span>
-          <input type="checkbox" className="switch" checked={room.autoRenew} onChange={(e) => save({ autoRenew: e.target.checked })} />
+          <input type="checkbox" className="switch" checked={autoRenew} onChange={(e) => setAutoRenew(e.target.checked)} />
         </label>
-      </div>
 
-      <h3 className="section">Участники</h3>
-      <div className="card form">
-        <div className="people">
-          {view.members.map((m) => (
-            <span key={m.id} className="person">
-              <span className="avatar small">{m.name.charAt(0).toUpperCase()}</span>
-              {m.name}
-            </span>
-          ))}
-        </div>
-        {invite && (
-          <button
-            className="primary"
-            onClick={() =>
-              tg?.openTelegramLink(
-                `https://t.me/share/url?url=${encodeURIComponent(invite)}&text=${encodeURIComponent(`Давай вести траты вместе: «${room.name}»`)}`,
-              )
-            }
-          >
-            Пригласить в комнату
+        <button className="primary" disabled={busy || !name.trim()}>
+          Сохранить
+        </button>
+      </form>
+
+      <div className="danger-zone">
+        {props.isOwner && (
+          <button className="link danger" onClick={clear}>
+            Очистить траты периода
           </button>
         )}
+        <button className="link danger" onClick={remove}>
+          {props.isOwner ? 'Удалить комнату' : 'Выйти из комнаты'}
+        </button>
       </div>
-    </main>
+    </Sheet>
   );
 }
 
@@ -571,9 +872,10 @@ const EXAMPLES = ['400 продукты', 'такси 650', 'кофе 280 и о�
 
 function AddSheet(props: {
   roomId: number;
-  colorOf: (c: Category | null) => string;
+  colorOf: ColorOf;
   onClose: () => void;
   onAdded: (next: Overview, added: Operation[]) => void;
+  onEdit: (op: Operation) => void;
   onUndone: () => void;
   fail: Fail;
 }) {
@@ -616,11 +918,18 @@ function AddSheet(props: {
         <div className="added">
           <ul className="rows">
             {added.map((op) => (
-              <li key={op.id} className="static">
+              <li
+                key={op.id}
+                onClick={() => {
+                  // правка открывается поверх; список здесь уже неактуален после смены категории
+                  setAdded([]);
+                  props.onEdit(op);
+                }}
+              >
                 <CategoryBadge category={op.category} color={props.colorOf(op.category)} />
                 <span className="grow">
                   <span className="title">{op.description}</span>
-                  <small>{op.category?.name}</small>
+                  <small>{op.category?.name} · нажмите, чтобы изменить</small>
                 </span>
                 <b>{money(op.amount)}</b>
               </li>
@@ -665,9 +974,11 @@ function EditSheet(props: { op: Operation; categories: Category[]; onClose: () =
           </button>
         ))}
       </div>
-      <button className="link danger block" onClick={() => act(api.remove(op.id))}>
-        Удалить трату
-      </button>
+      <div className="danger-zone">
+        <button className="link danger" onClick={() => act(api.remove(op.id))}>
+          Удалить трату
+        </button>
+      </div>
     </Sheet>
   );
 }
@@ -720,6 +1031,7 @@ function NewRoomSheet(props: { onClose: () => void; onCreate: (room: NewRoom) =>
           Бюджет на период, ₽
           <input inputMode="numeric" value={budget} placeholder="необязательно" onChange={(e) => setBudget(e.target.value.replace(/\D/g, ''))} />
         </label>
+        <p className="muted">Аватар и цвет можно выбрать в настройках комнаты после создания.</p>
         <button className="primary" disabled={busy || !name.trim()}>
           Создать комнату
         </button>

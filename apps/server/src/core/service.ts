@@ -27,6 +27,8 @@ export interface Room {
   budget: number | null;
   inviteCode: string;
   tzOffsetMin: number;
+  emoji: string | null;
+  color: string;
 }
 
 export interface Period {
@@ -51,6 +53,8 @@ export interface Operation {
   userName: string;
   amount: number;
   description: string;
+  /** позиция: общее название для одинаковых по сути трат («кофе» для «кофеёчек») */
+  item: string;
   category: Category | null;
   createdAt: Date;
 }
@@ -73,14 +77,15 @@ export interface BudgetInfo {
 const USER = `id, tg_id AS "tgId", name, active_room_id AS "activeRoomId", reminders`;
 const ROOM = `id, name, owner_id AS "ownerId", tg_chat_id AS "tgChatId", period_kind AS "periodKind",
   period_days AS "periodDays", auto_renew AS "autoRenew", budget, invite_code AS "inviteCode",
-  tz_offset_min AS "tzOffsetMin"`;
+  tz_offset_min AS "tzOffsetMin", emoji, color`;
 const PERIOD = `id, room_id AS "roomId", starts_at AS "startsAt", ends_at AS "endsAt", closed_at AS "closedAt"`;
-const OPERATION = `o.id, o.room_id AS "roomId", o.period_id AS "periodId", o.user_id AS "userId",
+const OPERATION = `o.id, o.room_id AS "roomId", o.period_id AS "periodId", o.user_id AS "userId", o.item,
   u.name AS "userName", o.amount, o.description, o.created_at AS "createdAt",
   c.id AS "categoryId", c.name AS "categoryName", c.emoji AS "categoryEmoji"`;
 const OPERATION_FROM = `operations o JOIN users u ON u.id = o.user_id LEFT JOIN categories c ON c.id = o.category_id`;
 
 const OTHER = 'Другое';
+const NO_DESCRIPTION = 'без описания';
 const DEFAULT_CATEGORIES: [string, string][] = [
   ['Продукты', '🛒'],
   ['Кафе и рестораны', '🍽'],
@@ -154,20 +159,61 @@ function clampDays(days: number | undefined): number {
   return Math.min(366, Math.max(1, Math.round(days ?? 30)));
 }
 
-export async function updateRoom(
-  app: App,
-  roomId: number,
-  patch: { name?: string; budget?: number | null; autoRenew?: boolean },
-): Promise<Room> {
+export const ROOM_COLORS = ['violet', 'blue', 'teal', 'green', 'orange', 'pink', 'red', 'graphite'] as const;
+export type RoomColor = (typeof ROOM_COLORS)[number];
+
+export interface RoomPatch {
+  name?: string;
+  budget?: number | null;
+  autoRenew?: boolean;
+  /** тип и длина периода меняются со следующего периода, текущий идёт до своего конца */
+  periodKind?: 'month' | 'days';
+  periodDays?: number;
+  /** null — вернуть аватар-букву */
+  emoji?: string | null;
+  color?: RoomColor;
+}
+
+export async function updateRoom(app: App, roomId: number, patch: RoomPatch): Promise<Room> {
   const [room] = await app.db.query<Room>(
     `UPDATE rooms SET
        name = COALESCE($2, name),
        budget = CASE WHEN $3 THEN $4::integer ELSE budget END,
-       auto_renew = COALESCE($5, auto_renew)
+       auto_renew = COALESCE($5, auto_renew),
+       emoji = CASE WHEN $6 THEN $7::text ELSE emoji END,
+       color = COALESCE($8, color),
+       period_kind = COALESCE($9, period_kind),
+       period_days = COALESCE($10, period_days)
      WHERE id = $1 RETURNING ${ROOM}`,
-    [roomId, patch.name?.trim().slice(0, 64) || null, patch.budget !== undefined, patch.budget ?? null, patch.autoRenew ?? null],
+    [
+      roomId,
+      patch.name?.trim().slice(0, 64) || null,
+      patch.budget !== undefined,
+      patch.budget ?? null,
+      patch.autoRenew ?? null,
+      patch.emoji !== undefined,
+      patch.emoji?.trim().slice(0, 16) || null,
+      patch.color ?? null,
+      patch.periodKind ?? null,
+      patch.periodDays === undefined ? null : clampDays(patch.periodDays),
+    ],
   );
   return room!;
+}
+
+export async function deleteRoom(app: App, roomId: number): Promise<void> {
+  await app.db.query('UPDATE users SET active_room_id = NULL WHERE active_room_id = $1', [roomId]);
+  await app.db.query('DELETE FROM rooms WHERE id = $1', [roomId]);
+}
+
+export async function leaveRoom(app: App, roomId: number, userId: number): Promise<void> {
+  await app.db.query('UPDATE users SET active_room_id = NULL WHERE id = $2 AND active_room_id = $1', [roomId, userId]);
+  await app.db.query('DELETE FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, userId]);
+}
+
+/** Удаляет все траты периода; выученные категории и позиции остаются. */
+export async function clearPeriod(app: App, periodId: number): Promise<void> {
+  await app.db.query('DELETE FROM operations WHERE period_id = $1', [periodId]);
 }
 
 export async function getRoom(app: App, roomId: number): Promise<Room | null> {
@@ -390,33 +436,46 @@ async function insertOperation(
   amount: number,
   description: string,
   categoryId: number | null,
+  item: string,
 ): Promise<Operation> {
   const [row] = await app.db.query<{ id: number }>(
-    `INSERT INTO operations (room_id, period_id, user_id, amount, description, category_id)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [period.roomId, period.id, user.id, amount, description.slice(0, 200), categoryId],
+    `INSERT INTO operations (room_id, period_id, user_id, amount, description, category_id, item)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [period.roomId, period.id, user.id, amount, description.slice(0, 200), categoryId, item],
   );
   return (await getOperation(app, row!.id))!;
 }
 
-async function findRule(app: App, roomId: number, description: string): Promise<number | null> {
-  const key = ruleKey(description);
-  if (!key) return null;
-  const [rule] = await app.db.query<{ categoryId: number }>(
-    'SELECT category_id AS "categoryId" FROM rules WHERE room_id = $1 AND key = $2',
-    [roomId, key],
-  );
-  return rule?.categoryId ?? null;
+/** Позиция по умолчанию — само описание; модель потом сводит варианты («кофеёчек») к одному названию. */
+function toItem(item: string | null | undefined, description: string): string {
+  return ruleKey(item ?? '').slice(0, 60) || ruleKey(description).slice(0, 60) || NO_DESCRIPTION;
 }
 
-async function saveRule(app: App, roomId: number, description: string, categoryId: number, byUser: boolean): Promise<void> {
+async function findRule(app: App, roomId: number, description: string): Promise<{ categoryId: number; item: string | null } | null> {
+  const key = ruleKey(description);
+  if (!key) return null;
+  const [rule] = await app.db.query<{ categoryId: number; item: string | null }>(
+    'SELECT category_id AS "categoryId", item FROM rules WHERE room_id = $1 AND key = $2',
+    [roomId, key],
+  );
+  return rule ?? null;
+}
+
+async function saveRule(
+  app: App,
+  roomId: number,
+  description: string,
+  categoryId: number,
+  item: string,
+  byUser: boolean,
+): Promise<void> {
   const key = ruleKey(description);
   if (!key) return;
   await app.db.query(
-    `INSERT INTO rules (room_id, key, category_id, by_user) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (room_id, key) DO UPDATE SET category_id = EXCLUDED.category_id, by_user = EXCLUDED.by_user
+    `INSERT INTO rules (room_id, key, category_id, item, by_user) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (room_id, key) DO UPDATE SET category_id = EXCLUDED.category_id, item = EXCLUDED.item, by_user = EXCLUDED.by_user
      WHERE EXCLUDED.by_user OR NOT rules.by_user`,
-    [roomId, key, categoryId, byUser],
+    [roomId, key, categoryId, item, byUser],
   );
 }
 
@@ -434,8 +493,12 @@ async function askLlm<T>(
      WHERE r.room_id = $1 ORDER BY r.by_user DESC LIMIT 40`,
     [roomId],
   );
+  const items = await app.db.query<{ item: string }>(
+    'SELECT item FROM operations WHERE room_id = $1 GROUP BY item ORDER BY COUNT(*) DESC, item LIMIT 60',
+    [roomId],
+  );
   try {
-    return await call(app.llm, { text, categories: categories.map((c) => c.name), hints });
+    return await call(app.llm, { text, categories: categories.map((c) => c.name), hints, items: items.map((i) => i.item) });
   } catch (err) {
     console.error('LLM failed', err);
     return null;
@@ -459,22 +522,27 @@ export async function addFromText(app: App, room: Room, user: User, text: string
 
   const quick = quickParse(text);
   if (quick) {
-    const known = quick.description ? await findRule(app, room.id, quick.description) : (other?.id ?? null);
-    const op = await insertOperation(app, period, user, quick.amount, quick.description || 'без описания', known);
-    return known === null ? { status: 'ok', ops: [op], pendingOpId: op.id } : { status: 'ok', ops: [op] };
+    const rule = quick.description ? await findRule(app, room.id, quick.description) : null;
+    const categoryId = quick.description ? (rule?.categoryId ?? null) : (other?.id ?? null);
+    const item = toItem(rule?.item, quick.description);
+    const op = await insertOperation(app, period, user, quick.amount, quick.description || NO_DESCRIPTION, categoryId, item);
+    return categoryId === null ? { status: 'ok', ops: [op], pendingOpId: op.id } : { status: 'ok', ops: [op] };
   }
 
   const parsed = await askLlm(app, room.id, text, categories, (llm, input) => llm.parse(input));
   if (!parsed?.length) return { status: 'not_understood' };
   const ops: Operation[] = [];
-  for (const item of parsed) {
-    const amount = Math.round(item.amount * 100);
+  for (const found of parsed) {
+    const amount = Math.round(found.amount * 100);
     if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 2_000_000_000) continue;
-    const category = categories.find((c) => c.name === item.category) ?? other;
+    const category = categories.find((c) => c.name === found.category) ?? other;
     // выученное правило сильнее догадки модели
-    const known = await findRule(app, room.id, item.description);
-    ops.push(await insertOperation(app, period, user, amount, item.description || 'без описания', known ?? category?.id ?? null));
-    if (known === null && category && category !== other) await saveRule(app, room.id, item.description, category.id, false);
+    const rule = await findRule(app, room.id, found.description);
+    const item = toItem(rule?.item ?? found.item, found.description);
+    ops.push(
+      await insertOperation(app, period, user, amount, found.description || NO_DESCRIPTION, rule?.categoryId ?? category?.id ?? null, item),
+    );
+    if (!rule && category && category !== other) await saveRule(app, room.id, found.description, category.id, item, false);
   }
   return ops.length ? { status: 'ok', ops } : { status: 'not_understood' };
 }
@@ -485,13 +553,15 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   if (!op || op.category) return op;
   const categories = await listCategories(app, op.roomId);
   const other = categories.find((c) => c.name === OTHER) ?? null;
-  const name = await askLlm(app, op.roomId, op.description, categories, (llm, input) => llm.categorize(input));
-  const guess = categories.find((c) => c.name === name);
+  const answer = await askLlm(app, op.roomId, op.description, categories, (llm, input) => llm.categorize(input));
+  const guess = categories.find((c) => c.name === answer?.category);
   const category = guess ?? other;
   if (!category) return op;
+  const item = toItem(answer?.item, op.description);
+  await app.db.query('UPDATE operations SET item = $1 WHERE id = $2', [item, opId]);
   // пользователь мог успеть выбрать категорию сам, пока думала модель
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2 AND category_id IS NULL', [category.id, opId]);
-  if (guess && guess !== other) await saveRule(app, op.roomId, op.description, guess.id, false);
+  if (guess && guess !== other) await saveRule(app, op.roomId, op.description, guess.id, item, false);
   return getOperation(app, opId);
 }
 
@@ -500,7 +570,7 @@ export async function setCategory(app: App, op: Operation, categoryId: number): 
   const [category] = await app.db.query('SELECT 1 FROM categories WHERE id = $1 AND room_id = $2', [categoryId, op.roomId]);
   if (!category) return null;
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2', [categoryId, op.id]);
-  await saveRule(app, op.roomId, op.description, categoryId, true);
+  await saveRule(app, op.roomId, op.description, categoryId, op.item, true);
   return getOperation(app, op.id);
 }
 
