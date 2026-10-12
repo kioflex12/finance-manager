@@ -27,6 +27,21 @@ LLM и распознавание голоса подключаются по Ope
 
 Без `DATABASE_URL` данные лежат во встроенной PGlite (`.data/`) — для продакшена нужен Postgres.
 
+### Развёртывание на сервере
+
+Нужен VPS с Docker и домен, указывающий на его IP (порты 80 и 443 открыты).
+Если домена нет, подойдёт бесплатное имя вида `1-2-3-4.sslip.io` для адреса 1.2.3.4.
+
+```bash
+git clone https://github.com/kioflex12/finance-manager.git && cd finance-manager
+cp .env.example .env   # BOT_TOKEN, BOT_USERNAME, LLM_*, STT_MODEL, DOMAIN, POSTGRES_PASSWORD
+docker compose up -d --build
+docker compose logs -f app
+```
+
+Поднимаются три контейнера: приложение, Postgres (данные в томе `pgdata`) и Caddy, который сам получает HTTPS-сертификат.
+Обновление — `git pull && docker compose up -d --build`.
+
 ### Настройка бота в @BotFather
 
 - Mini App: указать `WEBAPP_URL` как Main App — тогда работают ссылки `t.me/<bot>?startapp=...` из групп.
