@@ -66,7 +66,7 @@ export interface BudgetInfo {
   budget: number;
   left: number;
   daysLeft: number;
-  /** сколько можно тратить в день, чтобы уложиться; 0 при перерасходе */
+  /** сколько можно тратить в день, чтобы уложиться (целые рубли); 0 при перерасходе */
   perDay: number;
 }
 
@@ -353,7 +353,7 @@ export function budgetInfo(room: Room, period: Period, total: number, now = new 
   if (!room.budget) return null;
   const left = room.budget - total;
   const daysLeft = Math.max(1, Math.ceil((period.endsAt.getTime() - now.getTime()) / DAY));
-  return { budget: room.budget, left, daysLeft, perDay: left > 0 ? Math.floor(left / daysLeft) : 0 };
+  return { budget: room.budget, left, daysLeft, perDay: left > 0 ? Math.floor(left / daysLeft / 100) * 100 : 0 };
 }
 
 // ---------- операции ----------
