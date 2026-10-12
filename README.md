@@ -13,13 +13,17 @@
 
 ```bash
 npm install
-cp .env.example .env   # заполнить BOT_TOKEN, BOT_USERNAME, WEBAPP_URL, ANTHROPIC_API_KEY
+cp .env.example .env   # заполнить BOT_TOKEN, BOT_USERNAME, WEBAPP_URL, LLM_API_KEY
 npm run build
 npm start
 ```
 
 Сервер поднимает бота (long polling), API и отдаёт собранный миниапп с одного порта.
 `WEBAPP_URL` должен быть публичным HTTPS-адресом этого сервера.
+
+LLM и распознавание голоса подключаются по OpenAI-совместимому API, поэтому провайдер меняется в `.env` без правок кода
+(Groq, OpenRouter, Gemini, локальная Ollama). В `.env.example` — бесплатный тариф Groq: один ключ на разбор трат и на голос.
+При исчерпании лимита трата всё равно записывается, просто с категорией «Другое».
 
 Без `DATABASE_URL` данные лежат во встроенной PGlite (`.data/`) — для продакшена нужен Postgres.
 
@@ -42,7 +46,7 @@ npm run typecheck
 ```
 apps/server
   src/core/parse.ts    быстрый разбор «сумма + описание» без LLM
-  src/core/llm.ts      разбор сложных сообщений и подбор категории (Claude)
+  src/core/llm.ts      разбор сложных сообщений и подбор категории (OpenAI-совместимый API)
   src/core/service.ts  комнаты, периоды, операции, правила категорий, напоминания
   src/core/text.ts     тексты сводок
   src/bot.ts           Telegram-бот и фоновые задачи (закрытие периодов, напоминания)

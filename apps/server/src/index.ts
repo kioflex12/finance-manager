@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { createApi } from './api.js';
 import { createBot, startJobs } from './bot.js';
 import { config } from './config.js';
-import { createClaudeParser } from './core/llm.js';
+import { createLlmParser } from './core/llm.js';
 import type { App } from './core/service.js';
 import { createTranscriber } from './core/stt.js';
 import { openDb } from './db.js';
@@ -17,9 +17,12 @@ const MINIAPP_DIST = path.join(ROOT, 'apps/miniapp/dist');
 
 const app: App = {
   db: await openDb(config.databaseUrl || undefined, path.join(ROOT, '.data/pg')),
-  llm: config.llmEnabled ? createClaudeParser(config.llmModel) : null,
+  llm:
+    config.llmBaseUrl && config.llmModel
+      ? createLlmParser({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, model: config.llmModel })
+      : null,
 };
-if (!app.llm) console.warn('ANTHROPIC_API_KEY не задан: работает только быстрый разбор вида «400 продукты»');
+if (!app.llm) console.warn('LLM_BASE_URL и LLM_MODEL не заданы: работает только быстрый разбор вида «400 продукты»');
 
 const http = new Hono();
 http.route('/', createApi(app));

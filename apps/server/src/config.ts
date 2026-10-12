@@ -12,10 +12,12 @@ export const config = {
   webappUrl: env.WEBAPP_URL ?? '',
   port: Number(env.PORT ?? 3000),
   databaseUrl: env.DATABASE_URL ?? '',
-  llmEnabled: Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN),
-  llmModel: env.LLM_MODEL ?? 'claude-opus-5-5',
-  sttBaseUrl: env.STT_BASE_URL ?? '',
-  sttApiKey: env.STT_API_KEY ?? '',
+  llmBaseUrl: env.LLM_BASE_URL ?? '',
+  llmApiKey: env.LLM_API_KEY ?? '',
+  llmModel: env.LLM_MODEL ?? '',
+  // по умолчанию голос распознаёт тот же провайдер, что и LLM
+  sttBaseUrl: env.STT_BASE_URL || env.LLM_BASE_URL || '',
+  sttApiKey: env.STT_API_KEY || env.LLM_API_KEY || '',
   sttModel: env.STT_MODEL ?? '',
   devTgId: env.NODE_ENV === 'production' ? '' : (env.DEV_TG_ID ?? ''),
 };

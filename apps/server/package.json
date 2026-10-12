@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0",
     "@electric-sql/pglite": "^0.5.9",
     "@hono/node-server": "^2.1.4",
     "grammy": "^1.46.0",
