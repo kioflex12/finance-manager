@@ -19,7 +19,7 @@ export interface ExpenseParser {
 }
 
 export interface LlmOptions {
-  /** OpenAI-совместимый адрес, например https://api.groq.com/openai/v1 */
+  /** OpenAI-совместимый адрес, например https://api.mistral.ai/v1 */
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -49,7 +49,7 @@ const SYSTEM = `Ты разбираешь сообщения пользоват�
 Примеры из блока «Как он уже относил траты» важнее твоих собственных догадок: это исправления пользователя.
 Если в сообщении нет трат с суммой — верни {"operations": []}. Ничего не выдумывай.`;
 
-/** Разбор через любой OpenAI-совместимый /chat/completions (Groq, OpenRouter, Gemini, Ollama…). */
+/** Разбор через любой OpenAI-совместимый /chat/completions (Mistral, Groq, OpenRouter, Ollama…). */
 export function createLlmParser({ baseUrl, apiKey, model }: LlmOptions, fetchFn: typeof fetch = fetch): ExpenseParser {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   return {
