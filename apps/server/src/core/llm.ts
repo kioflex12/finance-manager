@@ -15,7 +15,10 @@ export interface ParseInput {
 }
 
 export interface ExpenseParser {
+  /** Разбирает сообщение на траты с суммами. */
   parse(input: ParseInput): Promise<ParsedOp[]>;
+  /** Подбирает категорию для описания уже записанной траты; null — модель не ответила внятно. */
+  categorize(input: ParseInput): Promise<string | null>;
 }
 
 export interface LlmOptions {
@@ -25,7 +28,7 @@ export interface LlmOptions {
   model: string;
 }
 
-const Output = z.object({
+const Operations = z.object({
   operations: z.array(
     z.object({
       amount: z.coerce.number(),
@@ -37,7 +40,9 @@ const Output = z.object({
 
 const TIMEOUT_MS = 15_000;
 
-const SYSTEM = `Ты разбираешь сообщения пользователя трекера расходов. Сообщение — это текст или расшифровка голосового на русском, в котором человек называет одну или несколько трат.
+const HINTS_NOTE = 'Примеры из блока «Как он уже относил траты» важнее твоих собственных догадок: это исправления пользователя.';
+
+const PARSE_SYSTEM = `Ты разбираешь сообщения пользователя трекера расходов. Сообщение — это текст или расшифровка голосового на русском, в котором человек называет одну или несколько трат.
 
 Ответь только JSON-объектом вида {"operations": [{"amount": 400, "description": "продукты", "category": "Продукты"}]}.
 
@@ -46,48 +51,67 @@ const SYSTEM = `Ты разбираешь сообщения пользоват�
 - description — короткое описание траты в нижнем регистре, как сказал бы сам пользователь («продукты», «такси до аэропорта»). Без суммы и слов вроде «запиши».
 - category — ровно одно название из списка категорий в сообщении. Если ничего не подходит — «Другое».
 
-Примеры из блока «Как он уже относил траты» важнее твоих собственных догадок: это исправления пользователя.
+${HINTS_NOTE}
 Если в сообщении нет трат с суммой — верни {"operations": []}. Ничего не выдумывай.`;
+
+const CATEGORIZE_SYSTEM = `Ты относишь трату пользователя трекера расходов к категории. В сообщении — список категорий и короткое описание траты на русском: товар, услуга, название магазина или сервиса.
+
+Ответь только JSON-объектом вида {"category": "Продукты"} — ровно одно название из списка категорий. Если ничего не подходит — «Другое».
+
+${HINTS_NOTE}`;
 
 /** Разбор через любой OpenAI-совместимый /chat/completions (Mistral, Groq, OpenRouter, Ollama…). */
 export function createLlmParser({ baseUrl, apiKey, model }: LlmOptions, fetchFn: typeof fetch = fetch): ExpenseParser {
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+  async function ask(system: string, label: string, { text, categories, hints }: ParseInput): Promise<string> {
+    const hintBlock = hints.length
+      ? `\n\nКак он уже относил траты:\n${hints.map((h) => `${h.description} → ${h.category}`).join('\n')}`
+      : '';
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: `Категории: ${categories.join(', ')}${hintBlock}\n\n${label}:\n${text}` },
+        ],
+      }),
+    });
+    // бесплатные тарифы упираются в лимиты (429) — вызывающий код переживает это без LLM
+    if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content ?? '';
+  }
+
   return {
-    async parse({ text, categories, hints }) {
-      const hintBlock = hints.length
-        ? `\n\nКак он уже относил траты:\n${hints.map((h) => `${h.description} → ${h.category}`).join('\n')}`
-        : '';
-      const res = await fetchFn(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-        body: JSON.stringify({
-          model,
-          temperature: 0,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: SYSTEM },
-            { role: 'user', content: `Категории: ${categories.join(', ')}${hintBlock}\n\nСообщение:\n${text}` },
-          ],
-        }),
-      });
-      // бесплатные тарифы упираются в лимиты (429) — вызывающий код переживает это без LLM
-      if (!res.ok) throw new Error(`LLM ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-      return parseReply(data.choices?.[0]?.message?.content ?? '');
-    },
+    parse: async (input) => parseReply(await ask(PARSE_SYSTEM, 'Сообщение', input)),
+    categorize: async (input) => parseCategory(await ask(CATEGORIZE_SYSTEM, 'Трата', input)),
   };
 }
 
 /** Модели иногда оборачивают JSON в ```-блок или добавляют пояснение — берём сам объект. */
-export function parseReply(content: string): ParsedOp[] {
+function jsonObject(content: string): unknown {
   const start = content.indexOf('{');
   const end = content.lastIndexOf('}');
-  if (start < 0 || end < start) return [];
+  if (start < 0 || end < start) return null;
   try {
-    const parsed = Output.safeParse(JSON.parse(content.slice(start, end + 1)));
-    return parsed.success ? parsed.data.operations.filter((op) => Number.isFinite(op.amount)) : [];
+    return JSON.parse(content.slice(start, end + 1));
   } catch {
-    return [];
+    return null;
   }
+}
+
+export function parseReply(content: string): ParsedOp[] {
+  const parsed = Operations.safeParse(jsonObject(content));
+  return parsed.success ? parsed.data.operations.filter((op) => Number.isFinite(op.amount)) : [];
+}
+
+export function parseCategory(content: string): string | null {
+  const parsed = z.object({ category: z.string() }).safeParse(jsonObject(content));
+  return parsed.success ? parsed.data.category : null;
 }

@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db.js';
-import type { ExpenseParser } from './llm.js';
+import type { ExpenseParser, ParseInput } from './llm.js';
 import { quickParse, ruleKey } from './parse.js';
 
 export interface App {
@@ -420,7 +420,14 @@ async function saveRule(app: App, roomId: number, description: string, categoryI
   );
 }
 
-async function llmParse(app: App, roomId: number, text: string, categories: Category[]) {
+/** Вызов LLM с категориями и выученными правилами комнаты; null — LLM нет или он не ответил. */
+async function askLlm<T>(
+  app: App,
+  roomId: number,
+  text: string,
+  categories: Category[],
+  call: (llm: ExpenseParser, input: ParseInput) => Promise<T>,
+): Promise<T | null> {
   if (!app.llm) return null;
   const hints = await app.db.query<{ description: string; category: string }>(
     `SELECT r.key AS description, c.name AS category FROM rules r JOIN categories c ON c.id = r.category_id
@@ -428,9 +435,9 @@ async function llmParse(app: App, roomId: number, text: string, categories: Cate
     [roomId],
   );
   try {
-    return await app.llm.parse({ text, categories: categories.map((c) => c.name), hints });
+    return await call(app.llm, { text, categories: categories.map((c) => c.name), hints });
   } catch (err) {
-    console.error('LLM parse failed', err);
+    console.error('LLM failed', err);
     return null;
   }
 }
@@ -457,7 +464,7 @@ export async function addFromText(app: App, room: Room, user: User, text: string
     return known === null ? { status: 'ok', ops: [op], pendingOpId: op.id } : { status: 'ok', ops: [op] };
   }
 
-  const parsed = await llmParse(app, room.id, text, categories);
+  const parsed = await askLlm(app, room.id, text, categories, (llm, input) => llm.parse(input));
   if (!parsed?.length) return { status: 'not_understood' };
   const ops: Operation[] = [];
   for (const item of parsed) {
@@ -478,8 +485,8 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   if (!op || op.category) return op;
   const categories = await listCategories(app, op.roomId);
   const other = categories.find((c) => c.name === OTHER) ?? null;
-  const parsed = await llmParse(app, op.roomId, op.description, categories);
-  const guess = categories.find((c) => c.name === parsed?.[0]?.category);
+  const name = await askLlm(app, op.roomId, op.description, categories, (llm, input) => llm.categorize(input));
+  const guess = categories.find((c) => c.name === name);
   const category = guess ?? other;
   if (!category) return op;
   // пользователь мог успеть выбрать категорию сам, пока думала модель

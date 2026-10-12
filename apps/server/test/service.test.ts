@@ -9,13 +9,14 @@ let llmCalls: ParseInput[];
 const fakeLlm: ExpenseParser = {
   async parse(input) {
     llmCalls.push(input);
-    if (input.text.includes(' и ')) {
-      return [
-        { amount: 400, description: 'продукты', category: 'Продукты' },
-        { amount: 250, description: 'такси', category: 'Транспорт' },
-      ];
-    }
-    return [{ amount: 0, description: input.text, category: input.text === 'такси' ? 'Транспорт' : 'Нет такой' }];
+    return [
+      { amount: 400, description: 'продукты', category: 'Продукты' },
+      { amount: 250, description: 'такси', category: 'Транспорт' },
+    ];
+  },
+  async categorize(input) {
+    llmCalls.push(input);
+    return input.text === 'такси' ? 'Транспорт' : 'Нет такой';
   },
 };
 

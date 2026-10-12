@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createLlmParser, parseReply } from '../src/core/llm.js';
+import { createLlmParser, parseCategory, parseReply } from '../src/core/llm.js';
 
 it('parseReply достаёт операции из чистого JSON, из ```-блока и терпит мусор', () => {
   const op = { amount: 400, description: 'продукты', category: 'Продукты' };
@@ -8,6 +8,12 @@ it('parseReply достаёт операции из чистого JSON, из ``
   expect(parseReply('не знаю')).toEqual([]);
   expect(parseReply('{"operations": "нет"}')).toEqual([]);
   expect(parseReply('{broken')).toEqual([]);
+});
+
+it('parseCategory', () => {
+  expect(parseCategory('{"category": "Транспорт"}')).toBe('Транспорт');
+  expect(parseCategory('Транспорт')).toBeNull();
+  expect(parseCategory('{"operations": []}')).toBeNull();
 });
 
 it('шлёт запрос в /chat/completions с категориями и подсказками и разбирает ответ', async () => {
