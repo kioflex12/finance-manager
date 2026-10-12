@@ -37,9 +37,9 @@ type ColorOf = (c: Category | null) => string;
 
 const ERRORS: Record<string, string> = {
   not_understood: 'Не нашёл сумму. Например: «400 продукты»',
-  no_period: 'Срок комнаты закончился — начните новый период',
+  no_period: 'Срок журнала закончился — начните новый период',
   unauthorized: 'Откройте приложение из Telegram',
-  forbidden: 'Это может сделать только владелец комнаты',
+  forbidden: 'Это может сделать только владелец журнала',
 };
 
 const DAY_MS = 86_400_000;
@@ -218,7 +218,7 @@ export function App() {
           <Icon name="plus" size={28} />
         </button>
         <TabButton icon="clock" label="История" active={tab === 'history' && onMain} onClick={() => go('history')} />
-        <TabButton icon="users" label="Комната" active={tab === 'room' && onMain} onClick={() => go('room')} />
+        <TabButton icon="users" label="Журнал" active={tab === 'room' && onMain} onClick={() => go('room')} />
       </nav>
 
       {adding && (
@@ -307,7 +307,7 @@ function Home(props: {
       <main className="page">
         <div className="card empty-state">
           <div className="big-emoji">🏁</div>
-          <h2>Срок комнаты закончился</h2>
+          <h2>Срок журнала закончился</h2>
           <p className="muted">Итоги сохранены в истории. Можно начать новый период.</p>
           <button className="primary" onClick={props.onStartPeriod}>
             Начать новый период
@@ -645,7 +645,7 @@ function History(props: { roomId: number; onOpen: (period: Period) => void; fail
 }
 
 function periodText(room: Room): string {
-  return room.periodKind === 'month' ? 'ежемесячная' : `на ${room.periodDays} дн.`;
+  return room.periodKind === 'month' ? 'ежемесячный' : `на ${room.periodDays} дн.`;
 }
 
 function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; onNew: () => void; onConfigure: () => void }) {
@@ -655,7 +655,7 @@ function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; 
 
   return (
     <main className="page">
-      <h1>Комната</h1>
+      <h1>Журнал</h1>
       <button className="card room-card pressable" onClick={props.onConfigure}>
         <RoomAvatar room={room} size="large" />
         <span className="grow">
@@ -687,12 +687,12 @@ function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; 
               )
             }
           >
-            Пригласить в комнату
+            Пригласить в журнал
           </button>
         )}
       </div>
 
-      <h3 className="section">Все комнаты</h3>
+      <h3 className="section">Все журналы</h3>
       <ul className="card rows">
         {me.rooms.map((r) => (
           <li key={r.id} onClick={() => props.onOpen(r.id)}>
@@ -713,7 +713,7 @@ function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; 
             <Icon name="plus" size={18} />
           </span>
           <span className="grow">
-            <span className="title accent">Новая комната</span>
+            <span className="title accent">Новый журнал</span>
           </span>
         </li>
       </ul>
@@ -772,8 +772,8 @@ function RoomSettingsSheet(props: {
 
   async function remove() {
     const question = props.isOwner
-      ? `Удалить комнату «${room.name}» со всеми тратами и историей? Отменить это нельзя.`
-      : `Выйти из комнаты «${room.name}»?`;
+      ? `Удалить журнал «${room.name}» со всеми тратами и историей? Отменить это нельзя.`
+      : `Выйти из журнала «${room.name}»?`;
     if (!(await confirmAction(question))) return;
     await api.deleteRoom(room.id).then(props.onRemoved).catch(fail);
   }
@@ -781,7 +781,7 @@ function RoomSettingsSheet(props: {
   const periodChanged = kind !== room.periodKind || (kind === 'days' && Number(days) !== room.periodDays);
 
   return (
-    <Sheet title="Настройки комнаты" onClose={props.onClose}>
+    <Sheet title="Настройки журнала" onClose={props.onClose}>
       <form className="form" onSubmit={save} style={roomVars(color)}>
         <div className="look">
           <RoomAvatar room={{ name: name || room.name, emoji, color }} size="large" />
@@ -861,7 +861,7 @@ function RoomSettingsSheet(props: {
           </button>
         )}
         <button className="link danger" onClick={remove}>
-          {props.isOwner ? 'Удалить комнату' : 'Выйти из комнаты'}
+          {props.isOwner ? 'Удалить журнал' : 'Выйти из журнала'}
         </button>
       </div>
     </Sheet>
@@ -1007,7 +1007,7 @@ function NewRoomSheet(props: { onClose: () => void; onCreate: (room: NewRoom) =>
   }
 
   return (
-    <Sheet title="Новая комната" onClose={props.onClose}>
+    <Sheet title="Новый журнал" onClose={props.onClose}>
       <form className="form" onSubmit={submit}>
         <label>
           Название
@@ -1015,7 +1015,7 @@ function NewRoomSheet(props: { onClose: () => void; onCreate: (room: NewRoom) =>
         </label>
         <div className="segmented">
           <button type="button" className={kind === 'month' ? 'active' : ''} onClick={() => setKind('month')}>
-            Ежемесячная
+            Ежемесячный
           </button>
           <button type="button" className={kind === 'days' ? 'active' : ''} onClick={() => setKind('days')}>
             На срок
@@ -1031,9 +1031,9 @@ function NewRoomSheet(props: { onClose: () => void; onCreate: (room: NewRoom) =>
           Бюджет на период, ₽
           <input inputMode="numeric" value={budget} placeholder="необязательно" onChange={(e) => setBudget(e.target.value.replace(/\D/g, ''))} />
         </label>
-        <p className="muted">Аватар и цвет можно выбрать в настройках комнаты после создания.</p>
+        <p className="muted">Аватар и цвет можно выбрать в настройках журнала после создания.</p>
         <button className="primary" disabled={busy || !name.trim()}>
-          Создать комнату
+          Создать журнал
         </button>
       </form>
     </Sheet>

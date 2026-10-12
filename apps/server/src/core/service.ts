@@ -137,7 +137,7 @@ export async function createRoom(app: App, owner: User, input: RoomInput, now = 
     `INSERT INTO rooms (name, owner_id, tg_chat_id, period_kind, period_days, auto_renew, budget, invite_code)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${ROOM}`,
     [
-      input.name.trim().slice(0, 64) || 'Комната',
+      input.name.trim().slice(0, 64) || 'Журнал',
       owner.id,
       input.tgChatId ?? null,
       input.periodKind,
@@ -273,6 +273,50 @@ export async function joinRoom(app: App, user: User, inviteCode: string): Promis
   await addMember(app, room.id, user.id);
   await setActiveRoom(app, user, room.id);
   return room;
+}
+
+/** Слово названия с допуском на падеж: «отпуск» найдётся и в «отпуске», «поездка» — в «поездку». */
+function inflected(word: string): string {
+  const stem = word.length > 4 ? word.slice(0, -2) : word.length > 3 ? word.slice(0, -1) : word;
+  return `${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\p{L}{0,3}`;
+}
+
+/**
+ * Журнал, явно названный в сообщении: «отпуск: 400 такси», «в отпуск 400 такси», «#отпуск 400 такси»,
+ * «400 такси в отпуск». Нужен предлог, двоеточие или решётка — иначе «400 продукты» ушло бы в журнал «Продукты».
+ * Возвращает журнал и текст траты без его названия.
+ */
+export function pickRoom(text: string, rooms: Room[]): { room: Room; rest: string } | null {
+  const source = text.trim();
+  const plain = source.toLowerCase().replace(/ё/g, 'е');
+  const firstWords = rooms.map((r) => ruleKey(r.name).split(' ')[0] ?? '');
+
+  // длинные названия раньше: «Отпуск в Сочи» не должен проиграть журналу «Отпуск»
+  const candidates = rooms
+    .map((room, i) => {
+      const words = ruleKey(room.name).split(' ').filter(Boolean);
+      const first = words[0] ?? '';
+      // короткое обращение по первому слову — только если оно не общее с другим журналом
+      const short = words.length > 1 && first.length >= 4 && firstWords.indexOf(first) === i && firstWords.lastIndexOf(first) === i;
+      return { room, names: [words.map(inflected).join('\\s+'), ...(short ? [inflected(first)] : [])], length: room.name.length };
+    })
+    .filter((c) => c.names[0])
+    .sort((a, b) => b.length - a.length);
+
+  for (const { room, names } of candidates) {
+    for (const name of names) {
+      const head = new RegExp(
+        `^(?:(?:запиши|записать|добавь)\\s+)?(?:(?<prep>в|во)\\s+|(?<hash>#))?${name}(?<colon>\\s*[:—-])?\\s+(?<rest>.+)$`,
+        'du',
+      ).exec(plain);
+      if (head?.groups && (head.groups.prep || head.groups.hash || head.groups.colon)) {
+        return { room, rest: source.slice(head.indices!.groups!.rest![0]) };
+      }
+      const tail = new RegExp(`^(?<rest>.+?)\\s+(?:в|во)\\s+${name}[.!]?$`, 'du').exec(plain);
+      if (tail) return { room, rest: source.slice(0, tail.indices!.groups!.rest![1]) };
+    }
+  }
+  return null;
 }
 
 export async function listCategories(app: App, roomId: number): Promise<Category[]> {
@@ -571,6 +615,21 @@ export async function setCategory(app: App, op: Operation, categoryId: number): 
   if (!category) return null;
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2', [categoryId, op.id]);
   await saveRule(app, op.roomId, op.description, categoryId, op.item, true);
+  return getOperation(app, op.id);
+}
+
+/** Переносит трату в текущий период другого журнала; категория подбирается по тому же названию. */
+export async function moveOperation(app: App, op: Operation, target: Room): Promise<Operation | null> {
+  const period = await currentPeriod(app, target.id);
+  if (!period) return null;
+  const categories = await listCategories(app, target.id);
+  const category = categories.find((c) => c.name === op.category?.name) ?? categories.find((c) => c.name === OTHER) ?? null;
+  await app.db.query('UPDATE operations SET room_id = $1, period_id = $2, category_id = $3 WHERE id = $4', [
+    target.id,
+    period.id,
+    category?.id ?? null,
+    op.id,
+  ]);
   return getOperation(app, op.id);
 }
 

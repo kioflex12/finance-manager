@@ -6,10 +6,11 @@ import type { Transcriber } from './core/stt.js';
 import { operationLine, reportText, summaryText, totalsLine } from './core/text.js';
 
 const HELP = `Просто напиши трату — например «400 продукты» или «такси 250». Можно несколько сразу или голосовым.
+Траты идут в активный журнал — его название видно под каждой записью. Записать в другой: «в отпуск: 400 такси».
 
 /summary — сколько потрачено за период
-/rooms — переключить комнату
-/invite — пригласить в комнату`;
+/rooms — переключить журнал
+/invite — пригласить в журнал`;
 
 export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   const bot = new Bot(config.botToken);
@@ -24,7 +25,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
 
   const roomOf = (ctx: Context, user: s.User) =>
     isGroup(ctx)
-      ? s.ensureGroupRoom(app, { id: ctx.chat!.id, title: ctx.chat!.title ?? 'Общая комната' }, user)
+      ? s.ensureGroupRoom(app, { id: ctx.chat!.id, title: ctx.chat!.title ?? 'Общий журнал' }, user)
       : s.ensureActiveRoom(app, user);
 
   function appKeyboard(ctx: Context, room: s.Room): InlineKeyboard | undefined {
@@ -35,8 +36,12 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
       : undefined;
   }
 
-  const opKeyboard = (opId: number) =>
-    new InlineKeyboard().text('✏️ Категория', `cat:${opId}`).text('↩️ Отменить', `del:${opId}`);
+  /** Кнопки под записанной тратой; перенос в другой журнал — только если у пользователя их несколько. */
+  async function opKeyboard(ctx: Context, opId: number): Promise<InlineKeyboard> {
+    const keyboard = new InlineKeyboard().text('✏️ Категория', `cat:${opId}`);
+    if (!isGroup(ctx) && (await s.listRooms(app, (await userOf(ctx)).id)).length > 1) keyboard.text('📒 Журнал', `mv:${opId}`);
+    return keyboard.text('↩️ Отменить', `del:${opId}`);
+  }
 
   async function footer(ctx: Context, room: s.Room): Promise<string> {
     const period = await s.currentPeriod(app, room.id);
@@ -48,11 +53,13 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
 
   async function record(ctx: Context, text: string, opts: { quiet?: boolean; heard?: string } = {}): Promise<void> {
     const user = await userOf(ctx);
-    const room = await roomOf(ctx, user);
-    const result = await s.addFromText(app, room, user, text);
+    // в личном чате журнал можно назвать прямо в сообщении: «в отпуск: 400 такси»; иначе — активный
+    const named = isGroup(ctx) ? null : s.pickRoom(text, await s.listRooms(app, user.id));
+    const room = named?.room ?? (await roomOf(ctx, user));
+    const result = await s.addFromText(app, room, user, named?.rest ?? text);
 
     if (result.status === 'no_period') {
-      await ctx.reply(`Срок комнаты «${room.name}» закончился.`, {
+      await ctx.reply(`Срок журнала «${room.name}» закончился.`, {
         reply_markup: new InlineKeyboard().text('Начать новый период', `np:${room.id}`),
       });
       return;
@@ -67,11 +74,12 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     for (const [i, op] of result.ops.entries()) {
       const last = i === result.ops.length - 1;
       const compose = (o: s.Operation) => `${i === 0 ? head : ''}${operationLine(o)}${last ? '\n' + tail : ''}`;
-      const sent = await ctx.reply(compose(op), { reply_markup: opKeyboard(op.id) });
+      const keyboard = await opKeyboard(ctx, op.id);
+      const sent = await ctx.reply(compose(op), { reply_markup: keyboard });
       if (result.pendingOpId === op.id) {
         const done = await s.categorizePending(app, op.id);
         // null — трату успели отменить, пока подбиралась категория
-        if (done) await ctx.api.editMessageText(sent.chat.id, sent.message_id, compose(done), { reply_markup: opKeyboard(op.id) });
+        if (done) await ctx.api.editMessageText(sent.chat.id, sent.message_id, compose(done), { reply_markup: keyboard });
       }
     }
   }
@@ -81,7 +89,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     if (isGroup(ctx)) {
       const room = await roomOf(ctx, user);
       await ctx.reply(
-        `Комната «${room.name}» готова. Пишите траты прямо сюда, начиная с суммы: «400 продукты». Итоги периода пришлю в этот чат.`,
+        `Журнал «${room.name}» готов. Пишите траты прямо сюда, начиная с суммы: «400 продукты». Итоги периода пришлю в этот чат.`,
         { reply_markup: appKeyboard(ctx, room) },
       );
       return;
@@ -89,7 +97,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     if (ctx.match.startsWith('join_')) {
       const joined = await s.joinRoom(app, user, ctx.match.slice(5));
       await ctx.reply(
-        joined ? `Ты в комнате «${joined.name}». Траты теперь записываются в неё.` : 'Приглашение не найдено или устарело.',
+        joined ? `Ты в журнале «${joined.name}». Траты теперь записываются в него.` : 'Приглашение не найдено или устарело.',
         joined ? { reply_markup: appKeyboard(ctx, joined) } : {},
       );
       return;
@@ -104,7 +112,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     const room = await roomOf(ctx, await userOf(ctx));
     const period = await s.currentPeriod(app, room.id);
     if (!period) {
-      await ctx.reply(`Срок комнаты «${room.name}» закончился.`, {
+      await ctx.reply(`Срок журнала «${room.name}» закончился.`, {
         reply_markup: new InlineKeyboard().text('Начать новый период', `np:${room.id}`),
       });
       return;
@@ -123,7 +131,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     for (const room of await s.listRooms(app, user.id)) {
       keyboard.text(`${room.id === active.id ? '● ' : ''}${room.name}`, `room:${room.id}`).row();
     }
-    await ctx.reply('В какую комнату записывать траты?', { reply_markup: keyboard });
+    await ctx.reply('В какой журнал записывать траты?', { reply_markup: keyboard });
   });
 
   bot.command('invite', async (ctx) => {
@@ -176,8 +184,32 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
 
   async function showOperation(ctx: Context, op: s.Operation): Promise<void> {
     const room = (await s.getRoom(app, op.roomId))!;
-    await ctx.editMessageText(`${operationLine(op)}\n${await footer(ctx, room)}`, { reply_markup: opKeyboard(op.id) });
+    await ctx.editMessageText(`${operationLine(op)}\n${await footer(ctx, room)}`, { reply_markup: await opKeyboard(ctx, op.id) });
   }
+
+  bot.callbackQuery(/^mv:(\d+)$/, async (ctx) => {
+    const op = await opFor(ctx, ctx.match[1]);
+    if (!op) return;
+    const keyboard = new InlineKeyboard();
+    for (const room of await s.listRooms(app, (await userOf(ctx)).id)) {
+      if (room.id !== op.roomId) keyboard.text(`${room.emoji ?? '📒'} ${room.name}`, `mvto:${op.id}:${room.id}`).row();
+    }
+    keyboard.text('← Назад', `back:${op.id}`);
+    await ctx.editMessageReplyMarkup({ reply_markup: keyboard });
+    await ctx.answerCallbackQuery({ text: 'В какой журнал перенести?' });
+  });
+
+  bot.callbackQuery(/^mvto:(\d+):(\d+)$/, async (ctx) => {
+    const op = await opFor(ctx, ctx.match[1]);
+    if (!op) return;
+    const target = await s.getRoom(app, Number(ctx.match[2]));
+    if (!target || !(await s.isMember(app, target.id, (await userOf(ctx)).id))) {
+      return void (await ctx.answerCallbackQuery({ text: 'Журнал не найден' }));
+    }
+    const moved = await s.moveOperation(app, op, target);
+    if (moved) await showOperation(ctx, moved);
+    await ctx.answerCallbackQuery({ text: moved ? `Перенёс в «${target.name}»` : `Срок журнала «${target.name}» закончился` });
+  });
 
   bot.callbackQuery(/^cat:(\d+)$/, async (ctx) => {
     const op = await opFor(ctx, ctx.match[1]);
@@ -203,7 +235,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   bot.callbackQuery(/^back:(\d+)$/, async (ctx) => {
     const op = await opFor(ctx, ctx.match[1]);
     if (!op) return;
-    await ctx.editMessageReplyMarkup({ reply_markup: opKeyboard(op.id) });
+    await ctx.editMessageReplyMarkup({ reply_markup: await opKeyboard(ctx, op.id) });
     await ctx.answerCallbackQuery();
   });
 
@@ -218,7 +250,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   bot.callbackQuery(/^room:(\d+)$/, async (ctx) => {
     const user = await userOf(ctx);
     const room = await s.getRoom(app, Number(ctx.match[1]));
-    if (!room || !(await s.isMember(app, room.id, user.id))) return void (await ctx.answerCallbackQuery({ text: 'Комната не найдена' }));
+    if (!room || !(await s.isMember(app, room.id, user.id))) return void (await ctx.answerCallbackQuery({ text: 'Журнал не найден' }));
     await s.setActiveRoom(app, user, room.id);
     await ctx.editMessageText(`Записываю в «${room.name}».`);
     await ctx.answerCallbackQuery();
@@ -227,7 +259,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   bot.callbackQuery(/^np:(\d+)$/, async (ctx) => {
     const user = await userOf(ctx);
     const room = await s.getRoom(app, Number(ctx.match[1]));
-    if (!room || !(await s.isMember(app, room.id, user.id))) return void (await ctx.answerCallbackQuery({ text: 'Комната не найдена' }));
+    if (!room || !(await s.isMember(app, room.id, user.id))) return void (await ctx.answerCallbackQuery({ text: 'Журнал не найден' }));
     await s.startNewPeriod(app, room);
     await ctx.editMessageReplyMarkup();
     await ctx.reply(`Новый период в «${room.name}» начат. Можно записывать траты.`);

@@ -67,6 +67,6 @@ export function summaryText({ room, period, stats, previous, renewed }: ClosedPe
   }
   lines.push('', ...categoryLines(stats, previous));
   if (stats.byMember.length > 1) lines.push('', ...stats.byMember.map((m) => `👤 ${m.name} — ${formatMoney(m.total)}`));
-  lines.push('', renewed ? 'Новый период уже идёт — продолжайте записывать траты.' : 'Срок комнаты закончился.');
+  lines.push('', renewed ? 'Новый период уже идёт — продолжайте записывать траты.' : 'Срок журнала закончился.');
   return lines.join('\n');
 }
