@@ -51,7 +51,7 @@ docker compose logs -f app
 
 ```bash
 DEV_TG_ID=1 npm run dev        # сервер; DEV_TG_ID пускает в API без Telegram
-npm run tunnel                 # публичный HTTPS-адрес для миниаппа с локальной машины (localhost.run)
+npm run tunnel                 # публичный HTTPS-адрес для миниаппа с локальной машины (serveo.net)
 npm run dev:miniapp            # фронт с hot reload, /api проксируется на :3000
 npm test                       # тесты ядра и API (на PGlite, внешние сервисы не нужны)
 npm run typecheck
