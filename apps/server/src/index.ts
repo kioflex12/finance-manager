@@ -36,6 +36,13 @@ http.route('/', createAdminApi(app));
 http.route('/', createApi(app));
 if (existsSync(MINIAPP_DIST)) {
   const root = path.relative(process.cwd(), MINIAPP_DIST);
+  http.use('*', async (c, next) => {
+    await next();
+    if (c.req.path.startsWith('/api/')) return;
+    // имена файлов в /assets содержат хэш содержимого — их можно кешировать навсегда;
+    // index.html и version.json — нет, иначе после выкладки откроется старая версия
+    c.header('Cache-Control', c.req.path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+  });
   http.use('*', serveStatic({ root }));
   http.get('*', serveStatic({ root, path: 'index.html' }));
 }

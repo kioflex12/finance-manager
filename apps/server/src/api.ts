@@ -175,7 +175,8 @@ export function createApi(app: s.App): Hono<Env> {
         closed = true;
         unsubscribe();
       });
-      await stream.writeSSE({ event: 'ready', data: String(room.id) });
+      // версия сборки: открытое приложение сравнит её со своей и обновится после выкладки
+      await stream.writeSSE({ event: 'ready', data: JSON.stringify({ roomId: room.id, version: config.miniappVersion }) });
       while (!closed) {
         await stream.sleep(HEARTBEAT_MS);
         if (!closed) await stream.writeSSE({ event: 'ping', data: '' });

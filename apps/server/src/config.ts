@@ -8,6 +8,16 @@ try {
 
 const env = process.env;
 const TUNNEL_URL_FILE = new URL('../../../.data/tunnel-url', import.meta.url);
+const MINIAPP_VERSION_FILE = new URL('../../../apps/miniapp/dist/version.json', import.meta.url);
+
+/** Версия собранного миниаппа; читается один раз при старте — выкладка новой версии перезапускает сервер. */
+function miniappVersion(): string {
+  try {
+    return String(JSON.parse(readFileSync(MINIAPP_VERSION_FILE, 'utf8')).version ?? '');
+  } catch {
+    return '';
+  }
+}
 
 export const config = {
   botToken: env.BOT_TOKEN ?? '',
@@ -22,6 +32,7 @@ export const config = {
     }
   },
   port: Number(env.PORT ?? 3000),
+  miniappVersion: miniappVersion(),
   databaseUrl: env.DATABASE_URL ?? '',
   llmBaseUrl: env.LLM_BASE_URL ?? '',
   llmApiKey: env.LLM_API_KEY ?? '',

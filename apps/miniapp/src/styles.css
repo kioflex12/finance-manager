@@ -1114,3 +1114,18 @@ input::placeholder {
   margin: -8px 0 12px;
 }
 
+
+.update-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 30;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: var(--hero);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 6px 18px var(--glow);
+  white-space: nowrap;
+}

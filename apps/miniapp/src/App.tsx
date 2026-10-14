@@ -46,6 +46,16 @@ const ERRORS: Record<string, string> = {
 const DAY_MS = 86_400_000;
 const RECENT_COUNT = 5;
 
+/** Версия с сервера (из события ready) отличается от версии этой сборки. В режиме разработки версии нет. */
+function isNewVersion(data: string): boolean {
+  try {
+    const { version } = JSON.parse(data) as { version?: string };
+    return Boolean(version) && version !== __BUILD_ID__;
+  } catch {
+    return false;
+  }
+}
+
 /** Экран из адреса (#ops, #room) — для прямых ссылок на раздел; #add сразу открывает ввод траты. */
 function initialTab(): Tab {
   const hash = location.hash.slice(1);
@@ -70,6 +80,8 @@ export function App() {
   const [configuring, setConfiguring] = useState(false);
   const [choosingPeriod, setChoosingPeriod] = useState(false);
   const [editing, setEditing] = useState<Operation | null>(null);
+  // на сервере новая версия, а перезагрузиться сейчас нельзя — открыт ввод
+  const [updateReady, setUpdateReady] = useState(false);
   const [error, setError] = useState('');
 
   const fail = useCallback<Fail>((err) => {
@@ -111,6 +123,12 @@ export function App() {
 
   const refresh = useCallback(() => void reload().catch(fail), [reload, fail]);
 
+  // новая версия: перезагружаемся сами, если пользователь ничего не вводит; иначе показываем плашку
+  const busy = adding || creating || configuring || editing !== null;
+  useEffect(() => {
+    if (updateReady && !busy) location.reload();
+  }, [updateReady, busy]);
+
   // Живые обновления: бот, другое устройство или участник журнала что-то записали — перечитываем.
   // Тихо, без ошибок на экране: обновление фоновое.
   useEffect(() => {
@@ -126,12 +144,21 @@ export function App() {
     let opened = false;
     events.addEventListener('change', soon);
     // после обрыва EventSource переподключается сам; пропущенное за это время подтягиваем разом
-    events.addEventListener('ready', () => {
+    events.addEventListener('ready', (e) => {
+      if (isNewVersion(e.data)) setUpdateReady(true);
       if (opened) soon();
       opened = true;
     });
     // вернулся в приложение из чата — данные могли устареть, пока оно было свёрнуто
-    const onVisible = () => document.visibilityState === 'visible' && soon();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      soon();
+      // соединение могло не переподключиться, пока приложение было свёрнуто — спрашиваем версию напрямую
+      fetch('/version.json', { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((v: { version?: string }) => v.version && v.version !== __BUILD_ID__ && setUpdateReady(true))
+        .catch(() => {});
+    };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearTimeout(timer);
@@ -140,10 +167,13 @@ export function App() {
     };
   }, [roomId, reload]);
 
+  /** Переход на вкладку нижней панели: всегда с самого начала — без вложенного экрана, фильтров и прокрутки. */
   function go(next: Tab) {
     tg?.HapticFeedback?.selectionChanged();
     setCategory(undefined);
+    setMemberFilter(null);
     setTab(next);
+    window.scrollTo({ top: 0 });
   }
 
   async function openRoom(id: number) {
@@ -197,11 +227,16 @@ export function App() {
               viewingHistory={viewingHistory}
               colorOf={colorOf}
               shared={shared}
-              onOpenCategory={setCategory}
+              onOpenCategory={(c) => {
+                setCategory(c);
+                // экран категории открывается с начала, а не с прокрутки обзора
+                window.scrollTo({ top: 0 });
+              }}
               onEdit={setEditing}
               onShowAll={(member) => {
-                setMemberFilter(member ?? null);
                 go('ops');
+                // фильтр ставим после перехода: go() сбрасывает фильтры вкладки
+                setMemberFilter(member ?? null);
               }}
               onChoosePeriod={() => setChoosingPeriod(true)}
               onBackToCurrent={() => setPeriodId(undefined)}
@@ -310,6 +345,11 @@ export function App() {
         <EditSheet op={editing} categories={view.categories} onClose={() => setEditing(null)} onChanged={refresh} fail={fail} />
       )}
       {error && <div className="toast">{error}</div>}
+      {updateReady && busy && (
+        <button className="update-banner" onClick={() => location.reload()}>
+          Вышло обновление · обновить
+        </button>
+      )}
     </div>
   );
 }
@@ -587,7 +627,14 @@ function CategoryScreen(props: {
   onEdit: (op: Operation) => void;
 }) {
   const { category, operations } = props;
-  const [open, setOpen] = useState<string | null>(null);
+  // позиции раскрываются независимо: открытие одной не сворачивает другие
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (name: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
   useBack(props.onBack);
 
   const byItem = new Map<string, Operation[]>();
@@ -627,10 +674,10 @@ function CategoryScreen(props: {
         <div key={item.name} className="card item">
           <button
             className="item-head"
-            aria-expanded={open === item.name}
+            aria-expanded={open.has(item.name)}
             onClick={() => {
               tg?.HapticFeedback?.selectionChanged();
-              setOpen(open === item.name ? null : item.name);
+              toggle(item.name);
             }}
           >
             <span className="grow">
@@ -643,11 +690,11 @@ function CategoryScreen(props: {
               </span>
             </span>
             <b>{money(item.total)}</b>
-            <span className={open === item.name ? 'chev open' : 'chev'}>
+            <span className={open.has(item.name) ? 'chev open' : 'chev'}>
               <Icon name="chevron" size={18} />
             </span>
           </button>
-          {open === item.name && (
+          {open.has(item.name) && (
             <ul className="rows nested">
               {item.list.map((op) => (
                 <li key={op.id} onClick={() => props.onEdit(op)}>
