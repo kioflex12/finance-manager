@@ -1,14 +1,17 @@
 {
   "name": "finance-manager",
   "private": true,
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "npm run dev -w apps/server",
     "tunnel": "node scripts/tunnel.mjs",
     "dev:miniapp": "npm run dev -w apps/miniapp",
-    "build": "npm run build -w apps/miniapp && npm run build -w apps/server",
+    "build": "npm run build -w apps/miniapp && npm run build -w apps/admin && npm run build -w apps/server",
     "start": "npm run start -w apps/server",
     "test": "npm run test -w apps/server",
-    "typecheck": "npm run typecheck -w apps/server && npm run typecheck -w apps/miniapp"
+    "typecheck": "npm run typecheck -w apps/server && npm run typecheck -w apps/miniapp && npm run typecheck -w apps/admin",
+    "dev:admin": "npm run dev -w apps/admin"
   }
 }

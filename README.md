@@ -69,6 +69,7 @@ apps/server
   src/api.ts           HTTP API миниаппа, авторизация по initData
   migrations/          SQL-миграции, применяются при старте
 apps/miniapp           React-приложение (Vite)
+apps/admin             сайт-админка (Vite + React): вход по логину, статистика, пользователи, журналы, рассылка
 ```
 
 Ядро не знает про Telegram: бот и API — два входа в один и тот же `service.ts`.

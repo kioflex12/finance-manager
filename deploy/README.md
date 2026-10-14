@@ -9,6 +9,10 @@ Node.js, Postgres и Caddy стоят прямо в системе. Для се�
 - Ubuntu 24.04, KVM, адрес `185.246.118.148`, вход только по SSH-ключу.
 - Миниапп: https://185-246-118-148.sslip.io — имя от sslip.io указывает на IP сервера,
   сертификат Let's Encrypt Caddy получает и продлевает сам.
+- Админка: https://admin.185-246-118-148.sslip.io — отдельный сайт (`apps/admin`), Caddy отдаёт его статику,
+  а `/api/admin/*` проксирует в приложение. На адресе миниаппа `/api/admin` закрыт.
+  Вход по логину и паролю; первый админ регистрируется по `ADMIN_SETUP_CODE` из `.env`,
+  дальше — только по приглашениям из раздела «Администраторы».
 - Приложение: `/opt/finance-manager`, пользователь `fm`, сервис `finance-manager` (systemd).
 - Настройки: `/opt/finance-manager/.env` (токен бота, ключ LLM, `DATABASE_URL`).
 - База: Postgres 16, база и роль `fm`; настройки под малую память — `/etc/postgresql/16/main/conf.d/small.conf`.
@@ -44,5 +48,7 @@ sudo -u postgres psql fm                  # база
    плюс `DATABASE_URL`, `WEBAPP_URL=https://<ip-через-дефисы>.sslip.io`.
 4. Unit `finance-manager.service`: `node --max-old-space-size=192 apps/server/dist/index.js`
    от пользователя `fm`, `Restart=always`.
-5. Caddyfile: `<домен>`, `encode gzip` для всего, кроме потока событий `*/events`, `reverse_proxy localhost:3000` (образец — `deploy/Caddyfile`).
+5. Caddyfile: сайт миниаппа — `encode gzip` для всего, кроме потока событий `*/events`, `reverse_proxy localhost:3000`,
+   `/api/admin/*` → 404; сайт `admin.<домен>` — `/api/admin/*` в приложение, остальное — `apps/admin/dist`
+   с `try_files {path} /index.html`. Плюс `ADMIN_SETUP_CODE` в `.env` для регистрации первого администратора.
 6. `scripts/deploy.sh root@<ip>`.

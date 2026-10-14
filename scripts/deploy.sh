@@ -12,12 +12,13 @@ cd "$(dirname "$0")/.."
 npm run build
 tar --force-local -czf "$ARCHIVE" package.json package-lock.json \
   apps/server/package.json apps/server/dist apps/server/migrations \
-  apps/miniapp/package.json apps/miniapp/dist
+  apps/miniapp/package.json apps/miniapp/dist \
+  apps/admin/package.json apps/admin/dist
 
 scp -q "$ARCHIVE" "$HOST:/tmp/release.tgz"
 ssh "$HOST" "set -e
   cd $APP_DIR
-  rm -rf apps/server/dist apps/miniapp/dist
+  rm -rf apps/server/dist apps/miniapp/dist apps/admin/dist
   tar -xzf /tmp/release.tgz && rm /tmp/release.tgz
   npm ci --omit=dev --no-audit --no-fund --loglevel=error
   npm cache clean --force 2>/dev/null
