@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { createAdminApi, isAdmin } from './admin-api.js';
 import { config } from './config.js';
 import { onRoomChange } from './core/events.js';
 import * as s from './core/service.js';
@@ -85,11 +84,8 @@ export function createApi(app: s.App): Hono<Env> {
       activeRoomId: active.id,
       rooms: await s.listRooms(app, user.id),
       botUsername: config.botUsername,
-      isAdmin: isAdmin(user),
     });
   });
-
-  api.route('/admin', createAdminApi(app));
 
   api.post('/join', async (c) => {
     const { code } = await c.req.json<{ code: string }>();

@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
+import { createAdminApi } from './admin-api.js';
 import { createApi } from './api.js';
 import { createBot, startJobs } from './bot.js';
 import { config } from './config.js';
@@ -30,6 +31,8 @@ const http = new Hono();
 // поток событий нельзя сжимать: сжатие буферизует ответ, и события не доходили бы до клиента
 const compressor = compress();
 http.use((c, next) => (c.req.path.endsWith('/events') ? next() : compressor(c, next)));
+// админка раньше API миниаппа: у неё свой вход, проверка подписи Telegram её не касается
+http.route('/', createAdminApi(app));
 http.route('/', createApi(app));
 if (existsSync(MINIAPP_DIST)) {
   const root = path.relative(process.cwd(), MINIAPP_DIST);
