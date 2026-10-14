@@ -32,7 +32,7 @@ import {
   useBack,
 } from './ui';
 
-type Tab = 'home' | 'ops' | 'history' | 'room';
+type Tab = 'home' | 'ops' | 'room';
 type Fail = (err: unknown) => void;
 type ColorOf = (c: Category | null) => string;
 
@@ -46,10 +46,11 @@ const ERRORS: Record<string, string> = {
 const DAY_MS = 86_400_000;
 const RECENT_COUNT = 5;
 
-/** Экран из адреса (#ops, #history, #room) — для прямых ссылок на раздел; #add сразу открывает ввод траты. */
+/** Экран из адреса (#ops, #room) — для прямых ссылок на раздел; #add сразу открывает ввод траты. */
 function initialTab(): Tab {
   const hash = location.hash.slice(1);
-  return hash === 'ops' || hash === 'history' || hash === 'room' ? hash : 'home';
+  if (hash === 'ops' || hash === 'history') return 'ops';
+  return hash === 'room' ? 'room' : 'home';
 }
 
 export function App() {
@@ -67,6 +68,7 @@ export function App() {
   const [adding, setAdding] = useState(location.hash === '#add');
   const [creating, setCreating] = useState(false);
   const [configuring, setConfiguring] = useState(false);
+  const [choosingPeriod, setChoosingPeriod] = useState(false);
   const [editing, setEditing] = useState<Operation | null>(null);
   const [error, setError] = useState('');
 
@@ -112,7 +114,8 @@ export function App() {
   // Живые обновления: бот, другое устройство или участник журнала что-то записали — перечитываем.
   // Тихо, без ошибок на экране: обновление фоновое.
   useEffect(() => {
-    if (!roomId) return;
+    // автоматизированный браузер (скриншоты, проверки) ждёт тишины в сети — открытый поток ему мешает
+    if (!roomId || navigator.webdriver) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     // запись и подбор категории приходят парой событий подряд — перечитываем один раз
     const soon = () => {
@@ -200,7 +203,7 @@ export function App() {
                 setMemberFilter(member ?? null);
                 go('ops');
               }}
-              onOpenHistory={() => go('history')}
+              onChoosePeriod={() => setChoosingPeriod(true)}
               onBackToCurrent={() => setPeriodId(undefined)}
               onSetBudget={() => setConfiguring(true)}
               onAdd={() => setAdding(true)}
@@ -209,6 +212,10 @@ export function App() {
           )}
           {tab === 'ops' && (
             <Operations
+              periodLabel={period?.label ?? ''}
+              viewingHistory={viewingHistory}
+              onChoosePeriod={() => setChoosingPeriod(true)}
+              onBackToCurrent={() => setPeriodId(undefined)}
               operations={operations}
               members={shared ? view.members.map((m) => m.name) : []}
               member={memberFilter}
@@ -218,16 +225,6 @@ export function App() {
               onEdit={setEditing}
             />
           )}
-          {tab === 'history' && (
-            <History
-              roomId={room.id}
-              onOpen={(p) => {
-                setPeriodId(p.closedAt ? p.id : undefined);
-                go('home');
-              }}
-              fail={fail}
-            />
-          )}
           {tab === 'room' && (
             <RoomTab
               me={me}
@@ -235,20 +232,33 @@ export function App() {
               onOpen={openRoom}
               onNew={() => setCreating(true)}
               onConfigure={() => setConfiguring(true)}
+              onChoosePeriod={() => setChoosingPeriod(true)}
             />
           )}
         </>
       )}
 
+      <button className="fab" aria-label="Добавить трату" disabled={!period || viewingHistory} onClick={() => setAdding(true)}>
+        <Icon name="plus" size={28} />
+      </button>
       <nav className="tabbar">
         <TabButton icon="home" label="Обзор" active={tab === 'home' && onMain} onClick={() => go('home')} />
-        <TabButton icon="list" label="Траты" active={tab === 'ops' && onMain} onClick={() => go('ops')} />
-        <button className="fab" aria-label="Добавить трату" disabled={!period || viewingHistory} onClick={() => setAdding(true)}>
-          <Icon name="plus" size={28} />
-        </button>
-        <TabButton icon="clock" label="История" active={tab === 'history' && onMain} onClick={() => go('history')} />
+        <TabButton icon="list" label="История" active={tab === 'ops' && onMain} onClick={() => go('ops')} />
         <TabButton icon="users" label="Журнал" active={tab === 'room' && onMain} onClick={() => go('room')} />
       </nav>
+
+      {choosingPeriod && (
+        <PeriodsSheet
+          roomId={room.id}
+          currentId={periodId ?? period?.id}
+          onClose={() => setChoosingPeriod(false)}
+          onOpen={(p) => {
+            setPeriodId(p.closedAt ? p.id : undefined);
+            setChoosingPeriod(false);
+          }}
+          fail={fail}
+        />
+      )}
 
       {adding && (
         <AddSheet
@@ -322,7 +332,7 @@ function Home(props: {
   onOpenCategory: (category: Category | null) => void;
   onEdit: (op: Operation) => void;
   onShowAll: (member?: string) => void;
-  onOpenHistory: () => void;
+  onChoosePeriod: () => void;
   onBackToCurrent: () => void;
   onSetBudget: () => void;
   onAdd: () => void;
@@ -352,8 +362,8 @@ function Home(props: {
   return (
     <main className="page">
       <section className="hero">
-        <button className="hero-period" onClick={props.onOpenHistory}>
-          {period.label} <Icon name="right" size={14} />
+        <button className="hero-period" onClick={props.onChoosePeriod}>
+          {period.label} <Icon name="chevron" size={14} />
         </button>
         <button className="hero-total" onClick={() => props.onShowAll()}>
           <span className="hero-label">{viewingHistory ? 'Потрачено за период' : 'Потрачено'}</span>
@@ -512,6 +522,10 @@ function DayGroups(props: { operations: Operation[]; colorOf: ColorOf; shared: b
 }
 
 function Operations(props: {
+  periodLabel: string;
+  viewingHistory: boolean;
+  onChoosePeriod: () => void;
+  onBackToCurrent: () => void;
   operations: Operation[];
   /** имена участников для фильтра; пусто в личной комнате */
   members: string[];
@@ -525,7 +539,17 @@ function Operations(props: {
   const operations = member ? props.operations.filter((op) => op.userName === member) : props.operations;
   return (
     <main className="page">
-      <h1>Траты</h1>
+      <div className="title-row">
+        <h1>История</h1>
+        <button className="period-chip" onClick={props.onChoosePeriod}>
+          {props.periodLabel} <Icon name="chevron" size={14} />
+        </button>
+      </div>
+      {props.viewingHistory && (
+        <button className="past-banner" onClick={props.onBackToCurrent}>
+          Прошлый период · вернуться к текущему
+        </button>
+      )}
       {props.members.length > 0 && (
         <div className="chips filter">
           <button className={member === null ? 'chip active' : 'chip'} onClick={() => props.onMember(null)}>
@@ -636,7 +660,14 @@ function CategoryScreen(props: {
   );
 }
 
-function History(props: { roomId: number; onOpen: (period: Period) => void; fail: Fail }) {
+/** Выбор периода: идущий и прошлые с итогами; полоска — сумма относительно самого дорогого периода. */
+function PeriodsSheet(props: {
+  roomId: number;
+  currentId: number | undefined;
+  onClose: () => void;
+  onOpen: (period: Period) => void;
+  fail: Fail;
+}) {
   const { roomId, fail } = props;
   const [periods, setPeriods] = useState<Period[] | null>(null);
   useEffect(() => {
@@ -649,9 +680,8 @@ function History(props: { roomId: number; onOpen: (period: Period) => void; fail
   const max = Math.max(1, ...(periods ?? []).map((p) => p.total ?? 0));
 
   return (
-    <main className="page">
-      <h1>История</h1>
-      <ul className="card rows">
+    <Sheet title="Периоды" onClose={props.onClose}>
+      <ul className="rows">
         {periods?.map((p) => (
           <li key={p.id} onClick={() => props.onOpen(p)}>
             <span className="grow">
@@ -662,14 +692,18 @@ function History(props: { roomId: number; onOpen: (period: Period) => void; fail
               </span>
             </span>
             <b>{money(p.total ?? 0)}</b>
-            <span className="chev">
-              <Icon name="right" size={16} />
-            </span>
+            {p.id === props.currentId && (
+              <span className="current-mark">
+                <Icon name="check" size={18} />
+              </span>
+            )}
           </li>
         ))}
       </ul>
-      {periods?.length === 1 && <p className="muted hint">Здесь будут итоги прошлых периодов — их можно открыть и сравнить.</p>}
-    </main>
+      {periods?.length === 1 && (
+        <p className="muted hint">Когда период закончится, его итоги останутся здесь — их можно будет открыть и сравнить.</p>
+      )}
+    </Sheet>
   );
 }
 
@@ -677,7 +711,14 @@ function periodText(room: Room): string {
   return room.periodKind === 'month' ? 'ежемесячный' : `на ${room.periodDays} дн.`;
 }
 
-function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; onNew: () => void; onConfigure: () => void }) {
+function RoomTab(props: {
+  me: Me;
+  view: RoomView;
+  onOpen: (id: number) => void;
+  onNew: () => void;
+  onConfigure: () => void;
+  onChoosePeriod: () => void;
+}) {
   const { me, view } = props;
   const { room } = view;
   const invite = me.botUsername ? `https://t.me/${me.botUsername}?start=join_${room.inviteCode}` : '';
@@ -695,6 +736,21 @@ function RoomTab(props: { me: Me; view: RoomView; onOpen: (id: number) => void; 
         </span>
         <span className="pill-action">Настроить</span>
       </button>
+
+      <ul className="card rows spaced">
+        <li onClick={props.onChoosePeriod}>
+          <span className="avatar small ghost">
+            <Icon name="clock" size={18} />
+          </span>
+          <span className="grow">
+            <span className="title">Периоды и итоги</span>
+            <small>{view.period?.label ?? 'текущий период закончился'}</small>
+          </span>
+          <span className="chev">
+            <Icon name="right" size={16} />
+          </span>
+        </li>
+      </ul>
 
       <h3 className="section">Участники</h3>
       <div className="card form">
