@@ -108,6 +108,7 @@ export interface Me {
   activeRoomId: number;
   rooms: Room[];
   botUsername: string;
+  isAdmin: boolean;
 }
 
 export interface NewRoom {
@@ -124,7 +125,7 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
+export async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const initData = tg?.initData;
   const res = await fetch(`/api${url}`, {
     method,

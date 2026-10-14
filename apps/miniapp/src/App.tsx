@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   api,
   ApiError,
@@ -33,6 +33,9 @@ import {
 } from './ui';
 
 type Tab = 'home' | 'ops' | 'room';
+
+// админка нужна одному-двум людям — её код грузится отдельно, только когда её открыли
+const Admin = lazy(() => import('./admin/Admin'));
 type Fail = (err: unknown) => void;
 type ColorOf = (c: Category | null) => string;
 
@@ -69,6 +72,8 @@ export function App() {
   const [creating, setCreating] = useState(false);
   const [configuring, setConfiguring] = useState(false);
   const [choosingPeriod, setChoosingPeriod] = useState(false);
+  // #admin — прямая ссылка на админку; откроется, только если пользователь администратор
+  const [adminOpen, setAdminOpen] = useState(location.hash === '#admin');
   const [editing, setEditing] = useState<Operation | null>(null);
   const [error, setError] = useState('');
 
@@ -163,10 +168,15 @@ export function App() {
   const colorOf: ColorOf = (c) => categoryColor(c, view.categories);
   const shared = view.members.length > 1;
   const onMain = category === undefined;
+  const showAdmin = adminOpen && me.isAdmin;
 
   return (
     <div className="app" style={roomVars(room.color)}>
-      {category !== undefined ? (
+      {showAdmin ? (
+        <Suspense fallback={<div className="splash"><span className="spinner" /></div>}>
+          <Admin onClose={() => setAdminOpen(false)} />
+        </Suspense>
+      ) : category !== undefined ? (
         <CategoryScreen
           category={category}
           operations={operations.filter((op) => (op.category?.id ?? null) === (category?.id ?? null))}
@@ -233,15 +243,18 @@ export function App() {
               onNew={() => setCreating(true)}
               onConfigure={() => setConfiguring(true)}
               onChoosePeriod={() => setChoosingPeriod(true)}
+              onAdmin={me.isAdmin ? () => setAdminOpen(true) : undefined}
             />
           )}
         </>
       )}
 
-      <button className="fab" aria-label="Добавить трату" disabled={!period || viewingHistory} onClick={() => setAdding(true)}>
-        <Icon name="plus" size={28} />
-      </button>
-      <nav className="tabbar">
+      {!showAdmin && (
+        <button className="fab" aria-label="Добавить трату" disabled={!period || viewingHistory} onClick={() => setAdding(true)}>
+          <Icon name="plus" size={28} />
+        </button>
+      )}
+      <nav className={showAdmin ? 'tabbar hidden' : 'tabbar'}>
         <TabButton icon="home" label="Обзор" active={tab === 'home' && onMain} onClick={() => go('home')} />
         <TabButton icon="list" label="История" active={tab === 'ops' && onMain} onClick={() => go('ops')} />
         <TabButton icon="users" label="Журнал" active={tab === 'room' && onMain} onClick={() => go('room')} />
@@ -729,6 +742,8 @@ function RoomTab(props: {
   onNew: () => void;
   onConfigure: () => void;
   onChoosePeriod: () => void;
+  /** есть только у администратора */
+  onAdmin?: () => void;
 }) {
   const { me, view } = props;
   const { room } = view;
@@ -761,6 +776,20 @@ function RoomTab(props: {
             <Icon name="right" size={16} />
           </span>
         </li>
+        {props.onAdmin && (
+          <li onClick={props.onAdmin}>
+            <span className="avatar small ghost">
+              <Icon name="users" size={18} />
+            </span>
+            <span className="grow">
+              <span className="title">Админка</span>
+              <small>статистика, пользователи, рассылка</small>
+            </span>
+            <span className="chev">
+              <Icon name="right" size={16} />
+            </span>
+          </li>
+        )}
       </ul>
 
       <h3 className="section">Участники</h3>
