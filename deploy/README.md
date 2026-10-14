@@ -44,5 +44,5 @@ sudo -u postgres psql fm                  # база
    плюс `DATABASE_URL`, `WEBAPP_URL=https://<ip-через-дефисы>.sslip.io`.
 4. Unit `finance-manager.service`: `node --max-old-space-size=192 apps/server/dist/index.js`
    от пользователя `fm`, `Restart=always`.
-5. Caddyfile: `<домен> { encode gzip; reverse_proxy localhost:3000 }`.
+5. Caddyfile: `<домен>`, `encode gzip` для всего, кроме потока событий `*/events`, `reverse_proxy localhost:3000` (образец — `deploy/Caddyfile`).
 6. `scripts/deploy.sh root@<ip>`.

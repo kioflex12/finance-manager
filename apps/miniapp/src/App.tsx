@@ -15,6 +15,7 @@ import {
   type Room,
   type RoomColor,
   type RoomView,
+  roomEventsUrl,
 } from './api';
 import {
   Breakdown,
@@ -107,6 +108,34 @@ export function App() {
   }, [error]);
 
   const refresh = useCallback(() => void reload().catch(fail), [reload, fail]);
+
+  // Живые обновления: бот, другое устройство или участник журнала что-то записали — перечитываем.
+  // Тихо, без ошибок на экране: обновление фоновое.
+  useEffect(() => {
+    if (!roomId) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // запись и подбор категории приходят парой событий подряд — перечитываем один раз
+    const soon = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void reload().catch(() => {}), 300);
+    };
+    const events = new EventSource(roomEventsUrl(roomId));
+    let opened = false;
+    events.addEventListener('change', soon);
+    // после обрыва EventSource переподключается сам; пропущенное за это время подтягиваем разом
+    events.addEventListener('ready', () => {
+      if (opened) soon();
+      opened = true;
+    });
+    // вернулся в приложение из чата — данные могли устареть, пока оно было свёрнуто
+    const onVisible = () => document.visibilityState === 'visible' && soon();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      events.close();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [roomId, reload]);
 
   function go(next: Tab) {
     tg?.HapticFeedback?.selectionChanged();

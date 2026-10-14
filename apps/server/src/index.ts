@@ -26,7 +26,9 @@ const app: App = {
 if (!app.llm) console.warn('LLM_BASE_URL и LLM_MODEL не заданы: работает только быстрый разбор вида «400 продукты»');
 
 const http = new Hono();
-http.use(compress());
+// поток событий нельзя сжимать: сжатие буферизует ответ, и события не доходили бы до клиента
+const compressor = compress();
+http.use((c, next) => (c.req.path.endsWith('/events') ? next() : compressor(c, next)));
 http.route('/', createApi(app));
 if (existsSync(MINIAPP_DIST)) {
   const root = path.relative(process.cwd(), MINIAPP_DIST);

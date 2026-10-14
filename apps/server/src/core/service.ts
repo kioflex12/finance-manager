@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db.js';
 import type { ExpenseParser, ParseInput } from './llm.js';
+import { notifyRoom } from './events.js';
 import { quickParse, ruleKey } from './parse.js';
 
 export interface App {
@@ -198,22 +199,27 @@ export async function updateRoom(app: App, roomId: number, patch: RoomPatch): Pr
       patch.periodDays === undefined ? null : clampDays(patch.periodDays),
     ],
   );
+  notifyRoom(roomId);
   return room!;
 }
 
 export async function deleteRoom(app: App, roomId: number): Promise<void> {
   await app.db.query('UPDATE users SET active_room_id = NULL WHERE active_room_id = $1', [roomId]);
   await app.db.query('DELETE FROM rooms WHERE id = $1', [roomId]);
+  notifyRoom(roomId);
 }
 
 export async function leaveRoom(app: App, roomId: number, userId: number): Promise<void> {
   await app.db.query('UPDATE users SET active_room_id = NULL WHERE id = $2 AND active_room_id = $1', [roomId, userId]);
   await app.db.query('DELETE FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, userId]);
+  notifyRoom(roomId);
 }
 
 /** Удаляет все траты периода; выученные категории и позиции остаются. */
 export async function clearPeriod(app: App, periodId: number): Promise<void> {
+  const [period] = await app.db.query<{ roomId: number }>('SELECT room_id AS "roomId" FROM periods WHERE id = $1', [periodId]);
   await app.db.query('DELETE FROM operations WHERE period_id = $1', [periodId]);
+  if (period) notifyRoom(period.roomId);
 }
 
 export async function getRoom(app: App, roomId: number): Promise<Room | null> {
@@ -234,7 +240,11 @@ export async function isMember(app: App, roomId: number, userId: number): Promis
 }
 
 async function addMember(app: App, roomId: number, userId: number): Promise<void> {
-  await app.db.query('INSERT INTO room_members (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [roomId, userId]);
+  const added = await app.db.query(
+    'INSERT INTO room_members (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING room_id',
+    [roomId, userId],
+  );
+  if (added.length) notifyRoom(roomId);
 }
 
 export async function listMembers(app: App, roomId: number): Promise<User[]> {
@@ -343,6 +353,7 @@ async function openPeriod(app: App, room: Room, from: Date): Promise<Period> {
     `INSERT INTO periods (room_id, starts_at, ends_at) VALUES ($1, $2::timestamptz, $3::timestamptz) RETURNING ${PERIOD}`,
     [room.id, start.toISOString(), end.toISOString()],
   );
+  notifyRoom(room.id);
   return period!;
 }
 
@@ -390,6 +401,7 @@ export async function closeDuePeriods(app: App, now = new Date()): Promise<Close
   );
   const result: ClosedPeriod[] = [];
   for (const period of due) {
+    notifyRoom(period.roomId);
     const room = await getRoom(app, period.roomId);
     if (!room) continue;
     const [prev] = await app.db.query<{ id: number }>(
@@ -487,6 +499,7 @@ async function insertOperation(
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
     [period.roomId, period.id, user.id, amount, description.slice(0, 200), categoryId, item],
   );
+  notifyRoom(period.roomId);
   return (await getOperation(app, row!.id))!;
 }
 
@@ -606,6 +619,7 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   // пользователь мог успеть выбрать категорию сам, пока думала модель
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2 AND category_id IS NULL', [category.id, opId]);
   if (guess && guess !== other) await saveRule(app, op.roomId, op.description, guess.id, item, false);
+  notifyRoom(op.roomId);
   return getOperation(app, opId);
 }
 
@@ -615,6 +629,7 @@ export async function setCategory(app: App, op: Operation, categoryId: number): 
   if (!category) return null;
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2', [categoryId, op.id]);
   await saveRule(app, op.roomId, op.description, categoryId, op.item, true);
+  notifyRoom(op.roomId);
   return getOperation(app, op.id);
 }
 
@@ -630,11 +645,14 @@ export async function moveOperation(app: App, op: Operation, target: Room): Prom
     category?.id ?? null,
     op.id,
   ]);
+  notifyRoom(op.roomId);
+  notifyRoom(target.id);
   return getOperation(app, op.id);
 }
 
 export async function deleteOperation(app: App, opId: number): Promise<void> {
-  await app.db.query('DELETE FROM operations WHERE id = $1', [opId]);
+  const [deleted] = await app.db.query<{ roomId: number }>('DELETE FROM operations WHERE id = $1 RETURNING room_id AS "roomId"', [opId]);
+  if (deleted) notifyRoom(deleted.roomId);
 }
 
 // ---------- напоминания ----------

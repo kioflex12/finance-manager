@@ -1,10 +1,13 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { config } from './config.js';
+import { onRoomChange } from './core/events.js';
 import * as s from './core/service.js';
 import { periodLabel } from './core/text.js';
 
 const INIT_DATA_TTL_SEC = 86_400;
+const HEARTBEAT_MS = 25_000;
 
 /** Проверяет подпись Telegram Mini App initData и возвращает пользователя из неё. */
 export function verifyInitData(initData: string, botToken: string, now = Date.now()): { id: number; name: string } | null {
@@ -35,7 +38,8 @@ export function createApi(app: s.App): Hono<Env> {
   const api = new Hono<Env>().basePath('/api');
 
   api.use(async (c, next) => {
-    const auth = c.req.header('authorization') ?? '';
+    // EventSource не умеет ставить заголовки — поток событий передаёт initData параметром
+    const auth = c.req.header('authorization') ?? (c.req.query('auth') ? `tma ${c.req.query('auth')}` : '');
     const tg = auth.startsWith('tma ')
       ? verifyInitData(auth.slice(4), config.botToken)
       : config.devTgId
@@ -146,6 +150,30 @@ export function createApi(app: s.App): Hono<Env> {
     const period = await s.currentPeriod(app, room.id);
     if (period) await s.clearPeriod(app, period.id);
     return c.json({ ok: true });
+  });
+
+  /**
+   * Живые обновления журнала: событие `change`, когда кто-то (бот, другое устройство, участник)
+   * поменял траты, период или настройки. Раз в 25 секунд — `ping`, чтобы прокси не рвали тихое соединение.
+   */
+  api.get('/rooms/:roomId/events', async (c) => {
+    const room = await memberRoom(c.get('user'), c.req.param('roomId'));
+    if (!room) return c.json({ error: 'not_found' }, 404);
+    return streamSSE(c, async (stream) => {
+      let closed = false;
+      const unsubscribe = onRoomChange(room.id, () => {
+        if (!closed) void stream.writeSSE({ event: 'change', data: String(room.id) });
+      });
+      stream.onAbort(() => {
+        closed = true;
+        unsubscribe();
+      });
+      await stream.writeSSE({ event: 'ready', data: String(room.id) });
+      while (!closed) {
+        await stream.sleep(HEARTBEAT_MS);
+        if (!closed) await stream.writeSSE({ event: 'ping', data: '' });
+      }
+    });
   });
 
   api.get('/rooms/:roomId/periods', async (c) => {

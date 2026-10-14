@@ -139,6 +139,12 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
+/** Адрес потока событий журнала; подпись Telegram идёт параметром, заголовки EventSource не поддерживает. */
+export function roomEventsUrl(roomId: number): string {
+  const initData = tg?.initData;
+  return `/api/rooms/${roomId}/events${initData ? `?auth=${encodeURIComponent(initData)}` : ''}`;
+}
+
 export const api = {
   me: () => call<Me>('GET', '/me'),
   join: (code: string) => call<{ room: Room }>('POST', '/join', { code }),

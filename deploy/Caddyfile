@@ -1,4 +1,6 @@
 {$DOMAIN} {
-	encode gzip
+	# поток событий (/api/rooms/:id/events) не сжимаем: сжатие копит ответ, и события доходили бы с задержкой
+	@compressible not path */events
+	encode @compressible gzip
 	reverse_proxy app:3000
 }
