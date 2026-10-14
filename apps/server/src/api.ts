@@ -216,9 +216,17 @@ export function createApi(app: s.App): Hono<Env> {
   api.patch('/operations/:opId', async (c) => {
     const op = await memberOperation(c.get('user'), c.req.param('opId'));
     if (!op) return c.json({ error: 'not_found' }, 404);
-    const { categoryId } = await c.req.json<{ categoryId: number }>();
-    const updated = await s.setCategory(app, op, Number(categoryId));
-    return updated ? c.json({ operation: updated }) : c.json({ error: 'bad_category' }, 422);
+    const body = await c.req.json<{ categoryId?: number; amount?: number }>();
+    let updated: s.Operation | null = op;
+    if (body.amount !== undefined) {
+      updated = await s.setAmount(app, op, Math.round(Number(body.amount)));
+      if (!updated) return c.json({ error: 'bad_amount' }, 422);
+    }
+    if (body.categoryId !== undefined) {
+      updated = await s.setCategory(app, updated, Number(body.categoryId));
+      if (!updated) return c.json({ error: 'bad_category' }, 422);
+    }
+    return c.json({ operation: updated });
   });
 
   api.delete('/operations/:opId', async (c) => {

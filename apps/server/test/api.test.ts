@@ -76,6 +76,25 @@ describe('API', () => {
     expect((await call(1, 'POST', `/rooms/${roomId}/operations`, { text: 'привет' })).status).toBe(422);
   });
 
+  it('сумму траты можно исправить, отдельно или вместе с категорией', async () => {
+    const roomId = (await (await call(1, 'GET', '/me')).json()).activeRoomId;
+    const added = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '400 продукты' })).json();
+    const opId = added.operations[0].id;
+    const food = (await (await call(1, 'GET', `/rooms/${roomId}`)).json()).categories.find((c: { name: string }) => c.name === 'Продукты');
+
+    const fixed = await (await call(1, 'PATCH', `/operations/${opId}`, { amount: 45050 })).json();
+    expect(fixed.operation.amount).toBe(45050);
+    expect((await (await call(1, 'GET', `/rooms/${roomId}`)).json()).stats.total).toBe(45050);
+
+    const both = await (await call(1, 'PATCH', `/operations/${opId}`, { amount: 50000, categoryId: food.id })).json();
+    expect(both.operation).toMatchObject({ amount: 50000, category: { name: 'Продукты' } });
+
+    for (const amount of [0, -100, 1e12, 'много']) {
+      expect((await call(1, 'PATCH', `/operations/${opId}`, { amount })).status).toBe(422);
+    }
+    expect((await call(2, 'PATCH', `/operations/${opId}`, { amount: 100 })).status).toBe(404);
+  });
+
   it('чужие комнаты и операции недоступны, пока не вступил по приглашению', async () => {
     const roomId = (await (await call(1, 'GET', '/me')).json()).activeRoomId;
     const added = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '400 продукты' })).json();

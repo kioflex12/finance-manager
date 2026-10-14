@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard, type Context } from 'grammy';
+import type { InlineKeyboardMarkup } from 'grammy/types';
 import { config } from './config.js';
 import { formatMoney, quickParse } from './core/parse.js';
 import * as s from './core/service.js';
@@ -38,9 +39,40 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
 
   /** Кнопки под записанной тратой; перенос в другой журнал — только если у пользователя их несколько. */
   async function opKeyboard(ctx: Context, opId: number): Promise<InlineKeyboard> {
-    const keyboard = new InlineKeyboard().text('✏️ Категория', `cat:${opId}`);
+    const keyboard = new InlineKeyboard().text('✏️ Категория', `cat:${opId}`).text('💰 Сумма', `amt:${opId}`).row();
     if (!isGroup(ctx) && (await s.listRooms(app, (await userOf(ctx)).id)).length > 1) keyboard.text('📒 Журнал', `mv:${opId}`);
     return keyboard.text('↩️ Отменить', `del:${opId}`);
+  }
+
+  /** Номер траты из кнопок под сообщением бота — так ответ на запись понимает, к какой трате он относится. */
+  function opIdOf(message: { reply_markup?: InlineKeyboardMarkup }): number | null {
+    for (const button of message.reply_markup?.inline_keyboard.flat() ?? []) {
+      const match = /^(?:cat|amt|del):(\d+)$/.exec('callback_data' in button ? button.callback_data : '');
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+
+  async function changeAmount(ctx: Context & { message: { reply_to_message?: { message_id: number } } }, opId: number, amount: number) {
+    const op = await s.getOperation(app, opId);
+    const user = await userOf(ctx);
+    if (!op || !(await s.isMember(app, op.roomId, user.id))) {
+      await ctx.reply('Эта трата уже удалена.');
+      return;
+    }
+    const updated = await s.setAmount(app, op, amount);
+    if (!updated) {
+      await ctx.reply('Такую сумму записать не получится.');
+      return;
+    }
+    const room = (await s.getRoom(app, op.roomId))!;
+    // обновляем саму запись, чтобы в чате не оставалась старая сумма
+    await ctx.api
+      .editMessageText(ctx.chat!.id, ctx.message.reply_to_message!.message_id, `${operationLine(updated)}\n${await footer(ctx, room)}`, {
+        reply_markup: await opKeyboard(ctx, op.id),
+      })
+      .catch(() => {});
+    await ctx.reply(`✅ Сумма исправлена: ${formatMoney(op.amount)} → ${formatMoney(updated.amount)}`);
   }
 
   async function footer(ctx: Context, room: s.Room): Promise<string> {
@@ -146,6 +178,10 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   bot.on('message:text', async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) return;
+    // ответ на запись бота одной суммой — исправление суммы этой траты
+    const repliedOp = ctx.message.reply_to_message?.from?.id === ctx.me.id ? opIdOf(ctx.message.reply_to_message) : null;
+    const newAmount = quickParse(text);
+    if (repliedOp && newAmount && !newAmount.description) return changeAmount(ctx, repliedOp, newAmount.amount);
     if (!isGroup(ctx)) return record(ctx, text);
 
     // В общем чате полно обычной переписки: без обращения к боту берём только «сумма + описание»
@@ -209,6 +245,15 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     const moved = await s.moveOperation(app, op, target);
     if (moved) await showOperation(ctx, moved);
     await ctx.answerCallbackQuery({ text: moved ? `Перенёс в «${target.name}»` : `Срок журнала «${target.name}» закончился` });
+  });
+
+  bot.callbackQuery(/^amt:(\d+)$/, async (ctx) => {
+    const op = await opFor(ctx, ctx.match[1]);
+    if (!op) return;
+    await ctx.answerCallbackQuery({
+      text: `Ответь на это сообщение новой суммой — например «${Math.round(op.amount / 100) + 50}»`,
+      show_alert: true,
+    });
   });
 
   bot.callbackQuery(/^cat:(\d+)$/, async (ctx) => {

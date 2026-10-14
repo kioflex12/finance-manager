@@ -633,6 +633,16 @@ export async function setCategory(app: App, op: Operation, categoryId: number): 
   return getOperation(app, op.id);
 }
 
+export const MAX_AMOUNT = 2_000_000_000;
+
+/** Исправление суммы (в копейках); null — сумма вне допустимого диапазона. */
+export async function setAmount(app: App, op: Operation, amount: number): Promise<Operation | null> {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > MAX_AMOUNT) return null;
+  await app.db.query('UPDATE operations SET amount = $1 WHERE id = $2', [amount, op.id]);
+  notifyRoom(op.roomId);
+  return getOperation(app, op.id);
+}
+
 /** Переносит трату в текущий период другого журнала; категория подбирается по тому же названию. */
 export async function moveOperation(app: App, op: Operation, target: Room): Promise<Operation | null> {
   const period = await currentPeriod(app, target.id);

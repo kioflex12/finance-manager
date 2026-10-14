@@ -806,7 +806,7 @@ function RoomTab(props: {
   );
 }
 
-const ROOM_EMOJI = ['🏠', '👨‍👩‍👧', '💑', '✈️', '🏖', '🚗', '🎉', '🛒', '🐶', '🎓', '💼', '🏗', '🎁', '🍽', '💊', '⚽', '🎮', '💰'];
+const ROOM_EMOJI = ['🏠', '👨‍👩‍👧', '👩‍❤️‍👨', '✈️', '🏖', '🚗', '🎉', '🛒', '🐶', '🎓', '💼', '🏗', '🎁', '🍽', '💊', '⚽', '🎮', '💰'];
 
 function RoomSettingsSheet(props: {
   room: Room;
@@ -1042,18 +1042,37 @@ function AddSheet(props: {
 
 function EditSheet(props: { op: Operation; categories: Category[]; onClose: () => void; onChanged: () => void; fail: Fail }) {
   const { op } = props;
+  const [amount, setAmount] = useState(String(op.amount / 100).replace('.', ','));
   const act = (action: Promise<unknown>) => action.then(props.onChanged).catch(props.fail).finally(props.onClose);
+
+  // «1 250,5» → 125050 копеек; null — в поле не сумма
+  const kopecks = Math.round(Number(amount.replace(/\s/g, '').replace(',', '.')) * 100);
+  const valid = Number.isSafeInteger(kopecks) && kopecks > 0;
+  const amountChanged = valid && kopecks !== op.amount;
+
+  function saveAmount(e: FormEvent) {
+    e.preventDefault();
+    if (amountChanged) act(api.updateOperation(op.id, { amount: kopecks }));
+  }
 
   return (
     <Sheet title={op.description} onClose={props.onClose}>
-      <div className="edit-amount">{money(op.amount)}</div>
+      <form className="amount-form" onSubmit={saveAmount}>
+        <label className="amount-field">
+          <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d\s.,]/g, ''))} aria-label="Сумма" />
+          <span>₽</span>
+        </label>
+        {amountChanged && <button className="primary">Сохранить</button>}
+      </form>
+      {!valid && <p className="field-error">Введите сумму больше нуля</p>}
       <p className="muted">Куда отнести? Запомню для таких же трат.</p>
       <div className="chips">
         {props.categories.map((c) => (
           <button
             key={c.id}
             className={c.id === op.category?.id ? 'chip active' : 'chip'}
-            onClick={() => act(api.setCategory(op.id, c.id))}
+            // если сумму уже поправили, сохраняем её вместе с категорией
+            onClick={() => act(api.updateOperation(op.id, { categoryId: c.id, ...(amountChanged ? { amount: kopecks } : {}) }))}
           >
             {c.emoji} {c.name}
           </button>

@@ -163,7 +163,9 @@ export const api = {
       `/rooms/${id}/operations?periodId=${periodId}${categoryId === undefined ? '' : `&categoryId=${categoryId ?? 'none'}`}`,
     ),
   add: (id: number, text: string) => call<Overview & { operations: Operation[] }>('POST', `/rooms/${id}/operations`, { text }),
-  setCategory: (opId: number, categoryId: number) => call<{ operation: Operation }>('PATCH', `/operations/${opId}`, { categoryId }),
+  /** amount — в копейках; можно менять сумму, категорию или всё сразу */
+  updateOperation: (opId: number, patch: { categoryId?: number; amount?: number }) =>
+    call<{ operation: Operation }>('PATCH', `/operations/${opId}`, patch),
   remove: (opId: number) => call<unknown>('DELETE', `/operations/${opId}`),
 };
 
