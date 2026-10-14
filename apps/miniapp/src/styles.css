@@ -929,7 +929,11 @@ input::placeholder {
   transform: rotate(180deg);
 }
 
-.rows.nested {
+/* раскрытый список внутри карточки позиции; общее правило .card > .rows с отрицательным
+   нижним отступом сюда не подходит — список вылезал за карточку и наезжал на следующую */
+.card > .rows.nested {
+  margin: 0;
+  padding-bottom: 4px;
   border-top: 1px solid var(--hairline);
   animation: fade 0.18s ease-out;
 }
@@ -1023,10 +1027,6 @@ input::placeholder {
 .chip,
 .link {
   text-align: center;
-}
-
-.rows.nested {
-  padding-bottom: 4px;
 }
 
 /* ---------- история и периоды ---------- */
