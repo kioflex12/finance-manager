@@ -34,3 +34,12 @@ it('formatMoney', () => {
   expect(formatMoney(19990)).toBe('199,90 ₽');
   expect(formatMoney(0)).toBe('0 ₽');
 });
+
+it('displayName приводит название траты к единому виду', async () => {
+  const { displayName } = await import('../src/core/service.js');
+  expect(displayName('кофе')).toBe('Кофе');
+  expect(displayName('  бизнес   ланч!! ')).toBe('Бизнес ланч');
+  expect(displayName('Яндекс Плюс')).toBe('Яндекс Плюс');
+  expect(displayName('ёлка')).toBe('Ёлка');
+  expect(displayName('...')).toBe('');
+});

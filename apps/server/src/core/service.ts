@@ -503,9 +503,18 @@ async function insertOperation(
   return (await getOperation(app, row!.id))!;
 }
 
-/** Позиция по умолчанию — само описание; модель потом сводит варианты («кофеёчек») к одному названию. */
+/**
+ * Название траты в едином виде — так она показывается везде: с большой буквы, без хвостовой пунктуации
+ * и лишних пробелов. Регистр внутри сохраняется, чтобы бренды оставались как есть («Яндекс Плюс»).
+ */
+export function displayName(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim().replace(/[.,;:!?…]+$/u, '').trim().slice(0, 60);
+  return clean ? clean.charAt(0).toLocaleUpperCase('ru') + clean.slice(1) : '';
+}
+
+/** Позиция: название от модели («кофеёчек» → «Кофе»), а без неё — само описание в едином виде. */
 function toItem(item: string | null | undefined, description: string): string {
-  return ruleKey(item ?? '').slice(0, 60) || ruleKey(description).slice(0, 60) || NO_DESCRIPTION;
+  return displayName(item ?? '') || displayName(description) || displayName(NO_DESCRIPTION);
 }
 
 async function findRule(app: App, roomId: number, description: string): Promise<{ categoryId: number; item: string | null } | null> {

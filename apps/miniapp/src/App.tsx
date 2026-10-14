@@ -493,6 +493,9 @@ function plural(n: number, one: string, few: string, many: string): string {
 
 const sum = (operations: Operation[]) => operations.reduce((total, op) => total + op.amount, 0);
 
+/** Исходные слова совпадают с названием траты — показывать их отдельно незачем. */
+const sameWords = (op: Operation) => op.description.toLowerCase().replace(/ё/g, 'е') === op.item.toLowerCase().replace(/ё/g, 'е');
+
 /** Лента трат, сгруппированная по дням, с суммой за день. */
 function DayGroups(props: { operations: Operation[]; colorOf: ColorOf; shared: boolean; onEdit: (op: Operation) => void }) {
   const groups: { label: string; items: Operation[] }[] = [];
@@ -588,8 +591,14 @@ function CategoryScreen(props: {
   useBack(props.onBack);
 
   const byItem = new Map<string, Operation[]>();
-  for (const op of operations) byItem.set(op.item, [...(byItem.get(op.item) ?? []), op]);
-  const items = [...byItem.entries()].map(([name, list]) => ({ name, list, total: sum(list) })).sort((a, b) => b.total - a.total);
+  // группируем без учёта регистра: старые записи и новые могли получить «кофе» и «Кофе»
+  for (const op of operations) {
+    const key = op.item.toLowerCase();
+    byItem.set(key, [...(byItem.get(key) ?? []), op]);
+  }
+  const items = [...byItem.values()]
+    .map((list) => ({ name: list[0]!.item, list, total: sum(list) }))
+    .sort((a, b) => b.total - a.total);
   const total = sum(operations);
 
   return (
@@ -643,9 +652,11 @@ function CategoryScreen(props: {
               {item.list.map((op) => (
                 <li key={op.id} onClick={() => props.onEdit(op)}>
                   <span className="grow">
-                    <span className="title">{op.description}</span>
-                    <small>
+                    <span className="title">
                       {dayLabel(op.createdAt)}, {new Date(op.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <small>
+                      {sameWords(op) ? item.name : `«${op.description}»`}
                       {props.shared && ` · ${op.userName}`}
                     </small>
                   </span>
@@ -1013,7 +1024,7 @@ function AddSheet(props: {
               >
                 <CategoryBadge category={op.category} color={props.colorOf(op.category)} />
                 <span className="grow">
-                  <span className="title">{op.description}</span>
+                  <span className="title">{op.item}</span>
                   <small>{op.category?.name} · нажмите, чтобы изменить</small>
                 </span>
                 <b>{money(op.amount)}</b>
@@ -1056,7 +1067,8 @@ function EditSheet(props: { op: Operation; categories: Category[]; onClose: () =
   }
 
   return (
-    <Sheet title={op.description} onClose={props.onClose}>
+    <Sheet title={op.item} onClose={props.onClose}>
+      {!sameWords(op) && <p className="muted original">Вы написали: «{op.description}»</p>}
       <form className="amount-form" onSubmit={saveAmount}>
         <label className="amount-field">
           <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d\s.,]/g, ''))} aria-label="Сумма" />

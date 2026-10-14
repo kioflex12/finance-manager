@@ -1109,3 +1109,7 @@ input::placeholder {
   color: var(--danger);
   font-size: 14px;
 }
+
+.sheet .original {
+  margin: -8px 0 12px;
+}

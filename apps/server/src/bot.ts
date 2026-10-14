@@ -288,7 +288,7 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     const op = await opFor(ctx, ctx.match[1]);
     if (!op) return;
     await s.deleteOperation(app, op.id);
-    await ctx.editMessageText(`↩️ Отменено: ${formatMoney(op.amount)} · ${op.description}`);
+    await ctx.editMessageText(`↩️ Отменено: ${formatMoney(op.amount)} · ${op.item}`);
     await ctx.answerCallbackQuery();
   });
 

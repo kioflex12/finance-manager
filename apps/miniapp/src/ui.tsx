@@ -125,7 +125,7 @@ export function OperationRow(props: { op: Operation; color: string; showUser: bo
     <li onClick={props.onClick}>
       <CategoryBadge category={op.category} color={props.color} />
       <span className="grow">
-        <span className="title">{op.description}</span>
+        <span className="title">{op.item}</span>
         <small>
           {op.category?.name ?? 'подбираю категорию'} · {time}
           {props.showUser && ` · ${op.userName}`}

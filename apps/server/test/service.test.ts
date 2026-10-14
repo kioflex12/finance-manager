@@ -91,7 +91,7 @@ describe('позиции внутри категории', () => {
       await s.categorizePending(app, res.pendingOpId!);
     }
     // модели передаются уже существующие позиции, чтобы она переиспользовала названия
-    expect(llmCalls.at(-1)?.items).toContain('кофе');
+    expect(llmCalls.at(-1)?.items).toContain('Кофе');
 
     const again = await s.addFromText(app, room, user, 'кофеёчек 150');
     if (again.status !== 'ok') throw new Error(again.status);
@@ -99,9 +99,9 @@ describe('позиции внутри категории', () => {
 
     const ops = await s.listOperations(app, (await s.currentPeriod(app, room.id))!.id);
     expect(ops.map((o) => [o.description, o.item])).toEqual([
-      ['кофеёчек', 'кофе'],
-      ['кофеёчек', 'кофе'],
-      ['кофе', 'кофе'],
+      ['кофеёчек', 'Кофе'],
+      ['кофеёчек', 'Кофе'],
+      ['кофе', 'Кофе'],
     ]);
   });
 
@@ -110,7 +110,7 @@ describe('позиции внутри категории', () => {
     const { user, room } = await setup();
     const res = await s.addFromText(app, room, user, '300 Шаурма!');
     if (res.status !== 'ok') throw new Error(res.status);
-    expect((await s.categorizePending(app, res.pendingOpId!))?.item).toBe('шаурма');
+    expect((await s.categorizePending(app, res.pendingOpId!))?.item).toBe('Шаурма');
   });
 });
 

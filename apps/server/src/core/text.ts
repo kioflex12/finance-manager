@@ -14,7 +14,7 @@ export function periodLabel(room: Room, period: Period): string {
 
 export function operationLine(op: Operation): string {
   const category = op.category ? `${op.category.emoji} ${op.category.name}` : '⏳ подбираю категорию';
-  return `✅ ${formatMoney(op.amount)} · ${op.description} — ${category}`;
+  return `✅ ${formatMoney(op.amount)} · ${op.item} — ${category}`;
 }
 
 export function budgetLine(info: BudgetInfo): string {
