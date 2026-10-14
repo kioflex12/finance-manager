@@ -21,14 +21,6 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   return data as T;
 }
 
-export interface Admin {
-  id: number;
-  login: string;
-  name: string;
-  createdAt: string;
-  lastLoginAt: string | null;
-}
-
 export interface DailyPoint {
   day: string;
   users: number;
@@ -103,7 +95,6 @@ export interface JournalDetails {
 
 export interface AuditEntry {
   id: number;
-  admin: string | null;
   action: string;
   details: Record<string, unknown>;
   ip: string | null;
@@ -111,15 +102,9 @@ export interface AuditEntry {
 }
 
 export const api = {
-  setup: () => call<{ needsSetup: boolean }>('GET', '/setup'),
-  register: (body: { login: string; name: string; password: string; invite: string }) => call<{ admin: Admin }>('POST', '/register', body),
-  login: (login: string, password: string) => call<{ admin: Admin }>('POST', '/login', { login, password }),
+  login: (login: string, password: string) => call<{ login: string }>('POST', '/login', { login, password }),
   logout: () => call<unknown>('POST', '/logout'),
-  me: () => call<{ admin: Admin }>('GET', '/me'),
-  changePassword: (current: string, next: string) => call<unknown>('POST', '/password', { current, next }),
-  admins: () => call<{ admins: Admin[] }>('GET', '/admins'),
-  invite: () => call<{ code: string; expiresAt: string }>('POST', '/invites'),
-  removeAdmin: (id: number) => call<unknown>('DELETE', `/admins/${id}`),
+  me: () => call<{ login: string }>('GET', '/me'),
   audit: () => call<{ entries: AuditEntry[] }>('GET', '/audit'),
   stats: () => call<Stats>('GET', '/stats'),
   users: (q: string) => call<{ users: User[] }>('GET', `/users?q=${encodeURIComponent(q)}`),
@@ -136,13 +121,6 @@ export const api = {
 const ERRORS: Record<string, string> = {
   wrong_credentials: 'Неверный логин или пароль',
   too_many_attempts: 'Слишком много попыток. Подождите 15 минут',
-  invite_required: 'Нужен код приглашения',
-  invite_invalid: 'Приглашение недействительно или уже использовано',
-  login_taken: 'Такой логин уже занят',
-  weak_password: 'Пароль — минимум 8 символов',
-  bad_login: 'Логин: 3–64 символа, буквы, цифры, точка, дефис, @',
-  wrong_password: 'Текущий пароль неверный',
-  cannot_remove_self: 'Себя удалить нельзя',
   bot_offline: 'Бот сейчас не запущен',
   not_delivered: 'Не доставлено: пользователь, скорее всего, остановил бота',
   empty: 'Пустое сообщение',

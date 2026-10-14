@@ -26,8 +26,9 @@ export const config = {
   llmBaseUrl: env.LLM_BASE_URL ?? '',
   llmApiKey: env.LLM_API_KEY ?? '',
   llmModel: env.LLM_MODEL ?? '',
-  /** одноразовый код для регистрации первого администратора сайта-админки, пока админов нет */
-  adminSetupCode: env.ADMIN_SETUP_CODE ?? '',
+  /** вход в админку: единственные логин и пароль, задаются только в настройках сервера */
+  adminLogin: env.ADMIN_LOGIN ?? '',
+  adminPassword: env.ADMIN_PASSWORD ?? '',
   // по умолчанию голос распознаёт тот же провайдер, что и LLM
   sttBaseUrl: env.STT_BASE_URL || env.LLM_BASE_URL || '',
   sttApiKey: env.STT_API_KEY || env.LLM_API_KEY || '',

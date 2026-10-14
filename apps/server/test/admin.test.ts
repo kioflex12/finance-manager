@@ -4,12 +4,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createAdminApi } from '../src/admin-api.js';
 import { createApi } from '../src/api.js';
 import { config } from '../src/config.js';
-import { LoginLimiter } from '../src/core/admin-auth.js';
+import { createSession, LoginLimiter, validSession } from '../src/core/admin-auth.js';
 import type { App } from '../src/core/service.js';
 import { openDb } from '../src/db.js';
 
 const TOKEN = '123:test-token';
-const SETUP = 'setup-code-123';
 const NAMES: Record<number, string> = { 1: 'Аня', 2: 'Борис' };
 
 function initData(id: number): string {
@@ -49,7 +48,8 @@ const user = (id: number, method: string, url: string, body?: unknown) =>
 beforeEach(async () => {
   config.botToken = TOKEN;
   config.devTgId = '';
-  config.adminSetupCode = SETUP;
+  config.adminLogin = 'admin';
+  config.adminPassword = 'correct-horse';
   sent = [];
   const app: App = { db: await openDb(), llm: null, send: async (chatId, text) => void sent.push([chatId, text]) };
   http = new Hono();
@@ -57,80 +57,64 @@ beforeEach(async () => {
   http.route('/', createApi(app));
 });
 
-async function registeredAdmin() {
+async function loggedInAdmin() {
   const admin = browser();
-  expect((await admin('POST', '/register', { login: 'Kostya', name: 'Костя', password: 'correct-horse', invite: SETUP })).status).toBe(200);
+  expect((await admin('POST', '/login', { login: 'admin', password: 'correct-horse' })).status).toBe(200);
   return admin;
 }
 
 describe('вход в админку', () => {
-  it('первый админ регистрируется только по коду установки', async () => {
+  it('только логин и пароль из настроек; регистрации нет', async () => {
     const guest = browser();
-    expect((await (await guest('GET', '/setup')).json()).needsSetup).toBe(true);
-    expect((await guest('POST', '/register', { login: 'x', name: 'x', password: 'long-password', invite: '' })).status).toBe(400);
-    expect((await guest('POST', '/register', { login: 'hacker', name: 'x', password: 'long-password', invite: 'wrong' })).status).toBe(403);
-    expect((await guest('POST', '/register', { login: 'kostya', name: 'К', password: 'short', invite: SETUP })).status).toBe(400);
+    expect((await guest('GET', '/stats')).status).toBe(401);
+    expect((await guest('POST', '/login', { login: 'admin', password: 'wrong-password' })).status).toBe(401);
+    expect((await guest('POST', '/login', { login: 'other', password: 'correct-horse' })).status).toBe(401);
+    expect((await guest('POST', '/register', { login: 'x', password: 'long-password' })).status).toBe(401);
 
-    const admin = await registeredAdmin();
-    expect((await (await admin('GET', '/me')).json()).admin).toMatchObject({ login: 'kostya', name: 'Костя' });
-    // код установки больше не работает: админ уже есть
-    expect((await guest('POST', '/register', { login: 'second', name: 'x', password: 'long-password', invite: SETUP })).status).toBe(403);
-    expect((await (await guest('GET', '/setup')).json()).needsSetup).toBe(false);
+    expect((await guest('POST', '/login', { login: '  ADMIN ', password: 'correct-horse' })).status).toBe(200);
+    expect((await (await guest('GET', '/me')).json()).login).toBe('admin');
+    expect((await guest('GET', '/stats')).status).toBe(200);
+    await guest('POST', '/logout', {});
+    expect((await guest('GET', '/stats')).status).toBe(401);
   });
 
-  it('без входа данные закрыты; вход, выход и неверный пароль', async () => {
-    await registeredAdmin();
-    const other = browser();
-    expect((await other('GET', '/stats')).status).toBe(401);
-    expect((await other('POST', '/login', { login: 'kostya', password: 'wrong-password' })).status).toBe(401);
-    expect((await other('POST', '/login', { login: '  KOSTYA ', password: 'correct-horse' })).status).toBe(200);
-    expect((await other('GET', '/stats')).status).toBe(200);
-    await other('POST', '/logout', {});
-    expect((await other('GET', '/stats')).status).toBe(401);
+  it('без настроенных данных войти нельзя вообще', async () => {
+    config.adminPassword = '';
+    expect((await browser()('POST', '/login', { login: 'admin', password: '' })).status).toBe(401);
+  });
+
+  it('смена пароля в настройках завершает старые сессии', async () => {
+    const admin = await loggedInAdmin();
+    config.adminPassword = 'new-password';
+    expect((await admin('GET', '/me')).status).toBe(401);
+  });
+
+  it('подделанная или просроченная cookie не пускает', async () => {
+    const creds = { login: 'admin', password: 'correct-horse' };
+    const token = createSession(creds, Date.now());
+    expect(validSession(creds, token)).toBe(true);
+    expect(validSession(creds, token.replace(/.$/, (ch) => (ch === 'a' ? 'b' : 'a')))).toBe(false);
+    expect(validSession(creds, `${Date.now() + 999_999_999}.${token.split('.')[1]}`)).toBe(false);
+    expect(validSession(creds, createSession(creds, Date.now() - 30 * 86_400_000))).toBe(false);
   });
 
   it('изменения принимаются только в JSON', async () => {
-    const res = await http.request('/api/admin/login', { method: 'POST', body: 'login=kostya&password=x', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
+    const res = await http.request('/api/admin/login', { method: 'POST', body: 'login=admin&password=x', headers: { 'content-type': 'application/x-www-form-urlencoded' } });
     expect(res.status).toBe(415);
-  });
-
-  it('приглашение одноразовое, новый админ входит своим паролем', async () => {
-    const admin = await registeredAdmin();
-    const { code } = await (await admin('POST', '/invites', {})).json();
-    const newcomer = browser();
-    expect((await newcomer('POST', '/register', { login: 'anna', name: 'Аня', password: 'another-pass', invite: code })).status).toBe(200);
-    expect((await browser()('POST', '/register', { login: 'boris', name: 'Б', password: 'another-pass', invite: code })).status).toBe(403);
-    expect((await (await admin('GET', '/admins')).json()).admins).toHaveLength(2);
-
-    const annaId = (await (await newcomer('GET', '/me')).json()).admin.id;
-    expect((await newcomer('DELETE', `/admins/${annaId}`)).status).toBe(400);
-    expect((await admin('DELETE', `/admins/${annaId}`)).status).toBe(200);
-    expect((await newcomer('GET', '/me')).status).toBe(401);
-  });
-
-  it('смена пароля выкидывает другие сессии', async () => {
-    const laptop = await registeredAdmin();
-    const phone = browser();
-    await phone('POST', '/login', { login: 'kostya', password: 'correct-horse' });
-    expect((await laptop('POST', '/password', { current: 'nope', next: 'new-password-1' })).status).toBe(400);
-    expect((await laptop('POST', '/password', { current: 'correct-horse', next: 'new-password-1' })).status).toBe(200);
-    expect((await laptop('GET', '/me')).status).toBe(200);
-    expect((await phone('GET', '/me')).status).toBe(401);
-    expect((await browser()('POST', '/login', { login: 'kostya', password: 'new-password-1' })).status).toBe(200);
   });
 
   it('перебор пароля упирается в лимит', () => {
     const limiter = new LoginLimiter(3, 60_000);
-    for (let i = 0; i < 3; i++) limiter.fail('ip|login', 1000);
-    expect(limiter.blocked('ip|login', 1000)).toBe(true);
-    expect(limiter.blocked('ip|other', 1000)).toBe(false);
-    expect(limiter.blocked('ip|login', 1000 + 61_000)).toBe(false);
+    for (let i = 0; i < 3; i++) limiter.fail('ip', 1000);
+    expect(limiter.blocked('ip', 1000)).toBe(true);
+    expect(limiter.blocked('other-ip', 1000)).toBe(false);
+    expect(limiter.blocked('ip', 1000 + 61_000)).toBe(false);
   });
 });
 
 describe('данные в админке', () => {
   it('статистика, блокировка, сообщение, удаление и журнал действий', { timeout: 30_000 }, async () => {
-    const admin = await registeredAdmin();
+    const admin = await loggedInAdmin();
     for (const id of [1, 2]) {
       const roomId = (await (await user(id, 'GET', '/me')).json()).activeRoomId;
       await user(id, 'POST', `/rooms/${roomId}/operations`, { text: '400 кофе' });
@@ -155,6 +139,6 @@ describe('данные в админке', () => {
     expect((await (await admin('GET', '/journals')).json()).journals).toHaveLength(1);
 
     const actions = (await (await admin('GET', '/audit')).json()).entries.map((e: { action: string }) => e.action);
-    expect(actions).toEqual(['user_deleted', 'user_messaged', 'user_unblocked', 'user_blocked', 'register']);
+    expect(actions).toEqual(['user_deleted', 'user_messaged', 'user_unblocked', 'user_blocked', 'login']);
   });
 });

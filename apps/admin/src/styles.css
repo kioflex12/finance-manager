@@ -541,19 +541,6 @@ textarea {
   border-top: 1px solid var(--hairline);
 }
 
-.invite {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.invite input {
-  flex: 1 1 360px;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 13px;
-}
-
 .error-text {
   margin: 0;
   color: var(--danger);

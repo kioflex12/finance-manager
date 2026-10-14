@@ -11,8 +11,8 @@ Node.js, Postgres и Caddy стоят прямо в системе. Для се�
   сертификат Let's Encrypt Caddy получает и продлевает сам.
 - Админка: https://admin.185-246-118-148.sslip.io — отдельный сайт (`apps/admin`), Caddy отдаёт его статику,
   а `/api/admin/*` проксирует в приложение. На адресе миниаппа `/api/admin` закрыт.
-  Вход по логину и паролю; первый админ регистрируется по `ADMIN_SETUP_CODE` из `.env`,
-  дальше — только по приглашениям из раздела «Администраторы».
+  Вход — единственные логин и пароль из `.env` (`ADMIN_LOGIN`, `ADMIN_PASSWORD`), регистрации нет.
+  Смена пароля — правкой `.env` и `systemctl restart finance-manager`; старые сессии при этом перестают действовать.
 - Приложение: `/opt/finance-manager`, пользователь `fm`, сервис `finance-manager` (systemd).
 - Настройки: `/opt/finance-manager/.env` (токен бота, ключ LLM, `DATABASE_URL`).
 - База: Postgres 16, база и роль `fm`; настройки под малую память — `/etc/postgresql/16/main/conf.d/small.conf`.
@@ -50,5 +50,5 @@ sudo -u postgres psql fm                  # база
    от пользователя `fm`, `Restart=always`.
 5. Caddyfile: сайт миниаппа — `encode gzip` для всего, кроме потока событий `*/events`, `reverse_proxy localhost:3000`,
    `/api/admin/*` → 404; сайт `admin.<домен>` — `/api/admin/*` в приложение, остальное — `apps/admin/dist`
-   с `try_files {path} /index.html`. Плюс `ADMIN_SETUP_CODE` в `.env` для регистрации первого администратора.
+   с `try_files {path} /index.html`. Плюс `ADMIN_LOGIN` и `ADMIN_PASSWORD` в `.env` для входа в админку.
 6. `scripts/deploy.sh root@<ip>`.

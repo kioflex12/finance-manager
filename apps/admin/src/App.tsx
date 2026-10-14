@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { api, errorText, type Admin } from './api';
-import { Admins, Audit, Profile } from './pages/Access';
+import { api, errorText } from './api';
+import { Audit } from './pages/Audit';
 import { Broadcast } from './pages/Broadcast';
 import { Dashboard } from './pages/Dashboard';
 import { Journals } from './pages/Journals';
@@ -13,9 +13,7 @@ const PAGES = [
   { path: '/users', label: 'Пользователи', icon: '👥' },
   { path: '/journals', label: 'Журналы', icon: '📒' },
   { path: '/broadcast', label: 'Рассылка', icon: '📣' },
-  { path: '/admins', label: 'Администраторы', icon: '🛡' },
   { path: '/audit', label: 'Журнал действий', icon: '🧾' },
-  { path: '/profile', label: 'Профиль', icon: '👤' },
 ] as const;
 
 function usePath(): [string, (path: string) => void] {
@@ -34,15 +32,15 @@ function usePath(): [string, (path: string) => void] {
 }
 
 export function App() {
-  // undefined — ещё проверяем сессию, null — не вошёл
-  const [admin, setAdmin] = useState<Admin | null | undefined>();
+  // undefined — ещё проверяем сессию, null — не вошёл, строка — логин
+  const [admin, setAdmin] = useState<string | null | undefined>();
   const [path, go] = usePath();
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
     api
       .me()
-      .then((r) => setAdmin(r.admin))
+      .then((r) => setAdmin(r.login))
       .catch(() => setAdmin(null));
     const onLogout = () => setAdmin(null);
     window.addEventListener('admin:logout', onLogout);
@@ -60,14 +58,7 @@ export function App() {
 
   if (admin === undefined) return <div className="splash">Загрузка…</div>;
   if (admin === null) {
-    return (
-      <AuthScreen
-        onSignedIn={(signedIn) => {
-          setAdmin(signedIn);
-          go(path.startsWith('/register') ? '/' : path);
-        }}
-      />
-    );
+    return <LoginScreen onSignedIn={setAdmin} />;
   }
 
   const page = PAGES.find((p) => p.path === path) ?? PAGES[0];
@@ -100,7 +91,7 @@ export function App() {
           ))}
         </nav>
         <div className="whoami">
-          <span>{admin.name}</span>
+          <span>{admin}</span>
           <button
             className="link"
             onClick={() =>
@@ -120,45 +111,26 @@ export function App() {
         {page.path === '/users' && <Users {...props} />}
         {page.path === '/journals' && <Journals {...props} />}
         {page.path === '/broadcast' && <Broadcast {...props} />}
-        {page.path === '/admins' && <Admins {...props} me={admin} />}
         {page.path === '/audit' && <Audit {...props} />}
-        {page.path === '/profile' && <Profile {...props} me={admin} />}
       </main>
       {toast && <div className={toast.error ? 'toast error' : 'toast'}>{toast.text}</div>}
     </div>
   );
 }
 
-/** Вход; регистрация — только по приглашению (ссылка /register?invite=…) или кодом установки для первого админа. */
-function AuthScreen({ onSignedIn }: { onSignedIn: (admin: Admin) => void }) {
-  const params = new URLSearchParams(location.search);
-  const [mode, setMode] = useState<'login' | 'register'>(location.pathname.startsWith('/register') ? 'register' : 'login');
-  const [needsSetup, setNeedsSetup] = useState(false);
+/** Вход: только логин и пароль, заданные в настройках сервера. */
+function LoginScreen({ onSignedIn }: { onSignedIn: (login: string) => void }) {
   const [login, setLogin] = useState('');
-  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
-  const [invite, setInvite] = useState(params.get('invite') ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api
-      .setup()
-      .then((r) => {
-        setNeedsSetup(r.needsSetup);
-        if (r.needsSetup) setMode('register');
-      })
-      .catch(() => {});
-  }, []);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError('');
     try {
-      const result = mode === 'login' ? await api.login(login, password) : await api.register({ login, name, password, invite });
-      if (mode === 'register') history.replaceState(null, '', '/');
-      onSignedIn(result.admin);
+      onSignedIn((await api.login(login, password)).login);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -176,39 +148,16 @@ function AuthScreen({ onSignedIn }: { onSignedIn: (admin: Admin) => void }) {
             <small>админка</small>
           </div>
         </div>
-        <h2>{mode === 'login' ? 'Вход' : needsSetup ? 'Первый администратор' : 'Регистрация по приглашению'}</h2>
-        {mode === 'register' && needsSetup && <p className="muted">Админов пока нет. Введите код установки, который выдал разработчик.</p>}
-        <Field label="Логин или email">
+        <Field label="Логин">
           <input autoFocus autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} required />
         </Field>
-        {mode === 'register' && (
-          <Field label="Имя">
-            <input autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} required />
-          </Field>
-        )}
-        <Field label="Пароль" hint={mode === 'register' ? 'минимум 8 символов' : undefined}>
-          <input
-            type="password"
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+        <Field label="Пароль">
+          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </Field>
-        {mode === 'register' && (
-          <Field label={needsSetup ? 'Код установки' : 'Код приглашения'}>
-            <input value={invite} onChange={(e) => setInvite(e.target.value)} required />
-          </Field>
-        )}
         {error && <p className="error-text">{error}</p>}
         <button className="primary" disabled={busy}>
-          {mode === 'login' ? 'Войти' : 'Зарегистрироваться'}
+          Войти
         </button>
-        {!needsSetup && (
-          <button type="button" className="link center" onClick={() => setMode(mode === 'login' ? 'register' : 'login')}>
-            {mode === 'login' ? 'Есть приглашение? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
-          </button>
-        )}
       </form>
     </div>
   );
