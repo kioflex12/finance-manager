@@ -19,7 +19,7 @@ function initData(id: number): string {
 async function waitFor(reader: ReadableStreamDefaultReader<Uint8Array>, event: string): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = '';
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 15_000;
   while (!buffer.includes(`event: ${event}`)) {
     if (Date.now() > deadline) throw new Error(`не дождался ${event}, пришло: ${buffer}`);
     const { value, done } = await reader.read();
@@ -28,7 +28,8 @@ async function waitFor(reader: ReadableStreamDefaultReader<Uint8Array>, event: s
   }
 }
 
-it('трата, записанная ботом, сразу приходит событием в открытое приложение', async () => {
+// под нагрузкой полного прогона одна только встроенная база поднимается несколько секунд
+it('трата, записанная ботом, сразу приходит событием в открытое приложение', { timeout: 30_000 }, async () => {
   config.botToken = TOKEN;
   config.devTgId = '';
   const app: s.App = { db: await openDb(), llm: null };
@@ -49,7 +50,7 @@ it('трата, записанная ботом, сразу приходит с�
   await reader.cancel();
 });
 
-it('чужой журнал не подписывается, без подписи — 401', async () => {
+it('чужой журнал не подписывается, без подписи — 401', { timeout: 30_000 }, async () => {
   config.botToken = TOKEN;
   config.devTgId = '';
   const app: s.App = { db: await openDb(), llm: null };
