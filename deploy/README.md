@@ -1,0 +1,48 @@
+# Развёртывание
+
+Сейчас приложение работает на VPS с 512 МБ памяти и 5 ГБ диска, поэтому без Docker:
+Node.js, Postgres и Caddy стоят прямо в системе. Для сервера покрупнее подойдёт
+`docker-compose.yml` из корня репозитория.
+
+## Текущий сервер
+
+- Ubuntu 24.04, KVM, адрес `185.246.118.148`, вход только по SSH-ключу.
+- Миниапп: https://185-246-118-148.sslip.io — имя от sslip.io указывает на IP сервера,
+  сертификат Let's Encrypt Caddy получает и продлевает сам.
+- Приложение: `/opt/finance-manager`, пользователь `fm`, сервис `finance-manager` (systemd).
+- Настройки: `/opt/finance-manager/.env` (токен бота, ключ LLM, `DATABASE_URL`).
+- База: Postgres 16, база и роль `fm`; настройки под малую память — `/etc/postgresql/16/main/conf.d/small.conf`.
+- HTTPS: `/etc/caddy/Caddyfile`, файрвол ufw открывает 22, 80, 443.
+
+**Telegram у этого хостера.** Основной адрес `api.telegram.org` из сети хостера недоступен,
+поэтому в `/etc/hosts` он закреплён за рабочим адресом Telegram `149.154.167.220`.
+Если бот перестанет отвечать, первым делом проверить:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://api.telegram.org/bot0/getMe   # ожидается 404
+```
+
+## Обновление
+
+```bash
+scripts/deploy.sh            # сборка, загрузка, npm ci, перезапуск сервиса
+```
+
+## Полезное
+
+```bash
+journalctl -u finance-manager -f          # логи
+systemctl restart finance-manager         # перезапуск
+sudo -u postgres psql fm                  # база
+```
+
+## Первичная настройка нового сервера
+
+1. `apt install postgresql caddy ufw`, Node.js 24 из официального архива в `/usr/local`.
+2. Роль и база `fm` в Postgres, `small.conf` с уменьшенными буферами.
+3. Пользователь `fm`, каталог `/opt/finance-manager`, `.env` по образцу `.env.example`
+   плюс `DATABASE_URL`, `WEBAPP_URL=https://<ip-через-дефисы>.sslip.io`.
+4. Unit `finance-manager.service`: `node --max-old-space-size=192 apps/server/dist/index.js`
+   от пользователя `fm`, `Restart=always`.
+5. Caddyfile: `<домен> { encode gzip; reverse_proxy localhost:3000 }`.
+6. `scripts/deploy.sh root@<ip>`.
