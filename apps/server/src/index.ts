@@ -9,6 +9,7 @@ import { createApi } from './api.js';
 import { createBot, startJobs } from './bot.js';
 import { config } from './config.js';
 import { createLlmParser } from './core/llm.js';
+import { measuredParser, measuredTranscriber } from './core/metrics.js';
 import type { App } from './core/service.js';
 import { createTranscriber } from './core/stt.js';
 import { openDb } from './db.js';
@@ -20,7 +21,7 @@ const app: App = {
   db: await openDb(config.databaseUrl || undefined, path.join(ROOT, '.data/pg')),
   llm:
     config.llmBaseUrl && config.llmModel
-      ? createLlmParser({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, model: config.llmModel })
+      ? measuredParser(createLlmParser({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, model: config.llmModel }))
       : null,
 };
 if (!app.llm) console.warn('LLM_BASE_URL и LLM_MODEL не заданы: работает только быстрый разбор вида «400 продукты»');
@@ -38,7 +39,9 @@ if (existsSync(MINIAPP_DIST)) {
 serve({ fetch: http.fetch, port: config.port }, () => console.log(`http://localhost:${config.port}`));
 
 if (config.botToken) {
-  const bot = createBot(app, createTranscriber());
+  const transcriber = createTranscriber();
+  const bot = createBot(app, transcriber && measuredTranscriber(transcriber));
+  app.send = async (chatId, text) => void (await bot.api.sendMessage(chatId, text));
   startJobs(app, bot);
   // кнопка миниаппа слева от поля ввода в чате с ботом
   if (config.webappUrl) {

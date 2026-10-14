@@ -7,6 +7,8 @@ import { quickParse, ruleKey } from './parse.js';
 export interface App {
   db: Db;
   llm: ExpenseParser | null;
+  /** отправка сообщения в Telegram от имени бота; нет, если бот не запущен */
+  send?: (chatId: string, text: string) => Promise<void>;
 }
 
 export interface User {
@@ -15,6 +17,7 @@ export interface User {
   name: string;
   activeRoomId: number | null;
   reminders: boolean;
+  blocked: boolean;
 }
 
 export interface Room {
@@ -75,7 +78,7 @@ export interface BudgetInfo {
   perDay: number;
 }
 
-const USER = `id, tg_id AS "tgId", name, active_room_id AS "activeRoomId", reminders`;
+const USER = `id, tg_id AS "tgId", name, active_room_id AS "activeRoomId", reminders, blocked`;
 const ROOM = `id, name, owner_id AS "ownerId", tg_chat_id AS "tgChatId", period_kind AS "periodKind",
   period_days AS "periodDays", auto_renew AS "autoRenew", budget, invite_code AS "inviteCode",
   tz_offset_min AS "tzOffsetMin", emoji, color`;
@@ -107,7 +110,7 @@ const DAY = 86_400_000;
 export async function ensureUser(app: App, tg: { id: number | string; name: string }): Promise<User> {
   const [user] = await app.db.query<User>(
     `INSERT INTO users (tg_id, name) VALUES ($1, $2)
-     ON CONFLICT (tg_id) DO UPDATE SET name = EXCLUDED.name RETURNING ${USER}`,
+     ON CONFLICT (tg_id) DO UPDATE SET name = EXCLUDED.name, last_seen_at = now() RETURNING ${USER}`,
     [String(tg.id), tg.name || 'Без имени'],
   );
   return user!;
@@ -413,7 +416,8 @@ export async function closeDuePeriods(app: App, now = new Date()): Promise<Close
       const next = periodBounds(room, period.endsAt);
       await openPeriod(app, room, next.end > now ? period.endsAt : now);
     }
-    const chatIds = room.tgChatId ? [room.tgChatId] : (await listMembers(app, room.id)).map((u) => u.tgId);
+    // заблокированным пользователям бот не пишет
+    const chatIds = room.tgChatId ? [room.tgChatId] : (await listMembers(app, room.id)).filter((u) => !u.blocked).map((u) => u.tgId);
     result.push({
       room,
       period,
@@ -683,7 +687,7 @@ export async function dueReminders(app: App, now = new Date()): Promise<User[]> 
   const users = await app.db.query<User & { tzOffsetMin: number }>(
     `SELECT u.id, u.tg_id AS "tgId", u.name, u.active_room_id AS "activeRoomId", u.reminders, r.tz_offset_min AS "tzOffsetMin"
      FROM users u JOIN rooms r ON r.id = u.active_room_id
-     WHERE u.reminders
+     WHERE u.reminders AND NOT u.blocked
        AND EXTRACT(HOUR FROM ($1::timestamptz AT TIME ZONE 'UTC') + make_interval(mins => r.tz_offset_min)) = ${REMINDER_HOUR}
        AND u.last_reminded_on IS DISTINCT FROM (($1::timestamptz AT TIME ZONE 'UTC') + make_interval(mins => r.tz_offset_min))::date
        AND EXISTS (SELECT 1 FROM periods p WHERE p.room_id = r.id AND p.closed_at IS NULL)

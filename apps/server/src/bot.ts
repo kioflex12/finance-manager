@@ -22,6 +22,12 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
       name: [ctx.from!.first_name, ctx.from!.last_name].filter(Boolean).join(' '),
     });
 
+  // заблокированные в админке пользователи для бота не существуют
+  bot.use(async (ctx, next) => {
+    if (ctx.from && !ctx.from.is_bot && (await userOf(ctx)).blocked) return;
+    await next();
+  });
+
   const isGroup = (ctx: Context) => ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
 
   const roomOf = (ctx: Context, user: s.User) =>

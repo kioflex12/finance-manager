@@ -26,6 +26,8 @@ export const config = {
   llmBaseUrl: env.LLM_BASE_URL ?? '',
   llmApiKey: env.LLM_API_KEY ?? '',
   llmModel: env.LLM_MODEL ?? '',
+  /** Telegram id администраторов через запятую — им в приложении открыта админка */
+  adminTgIds: (env.ADMIN_TG_IDS ?? '').split(',').map((id) => id.trim()).filter(Boolean),
   // по умолчанию голос распознаёт тот же провайдер, что и LLM
   sttBaseUrl: env.STT_BASE_URL || env.LLM_BASE_URL || '',
   sttApiKey: env.STT_API_KEY || env.LLM_API_KEY || '',
