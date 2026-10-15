@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, type Context } from 'grammy';
+import { Bot, HttpError, InlineKeyboard, type Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { config } from './config.js';
 import { formatMoney, quickParse } from './core/parse.js';
@@ -14,8 +14,25 @@ const HELP = `Просто напиши трату — например «400 п
 /rooms — переключить журнал
 /invite — пригласить в журнал`;
 
+/** Сколько раз пробовать отправить запрос к Telegram, если сеть его не пропустила. */
+const TELEGRAM_ATTEMPTS = 4;
+
 export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   const bot = new Bot(config.botToken);
+
+  // Сеть хостера пропускает к Telegram не каждое подключение: при сетевой ошибке повторяем запрос,
+  // чтобы ответ, сводка или напоминание не терялись. getUpdates grammY и так повторяет сам.
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await prev(method, payload, signal);
+        // HttpError — запрос не дошёл до Telegram; ошибки самого Telegram (неверный chat и т.п.) не повторяем
+      } catch (err) {
+        if (method === 'getUpdates' || !(err instanceof HttpError) || attempt >= TELEGRAM_ATTEMPTS) throw err;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      }
+    }
+  });
 
   const userOf = (ctx: Context) =>
     s.ensureUser(app, {

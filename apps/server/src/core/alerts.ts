@@ -43,13 +43,22 @@ export function createAlerts(chatId: string, send: (chatId: string, text: string
 /** Отправка без запущенного бота — когда приложение не смогло стартовать. */
 export function botApiSender(token: string) {
   return async (chatId: string, text: string) => {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) throw new Error(`Bot API ${res.status}`);
+    // сеть хостера пропускает к Telegram не каждое подключение — пробуем несколько раз
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) throw new Error(`Bot API ${res.status}`);
+        return;
+      } catch (err) {
+        if (attempt >= 4) throw err;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      }
+    }
   };
 }
 
