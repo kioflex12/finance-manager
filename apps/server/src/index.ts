@@ -9,6 +9,7 @@ import { createAdminApi } from './admin-api.js';
 import { createApi } from './api.js';
 import { createBot, startJobs } from './bot.js';
 import { config } from './config.js';
+import { botApiSender, createAlerts } from './core/alerts.js';
 import { createLlmParser } from './core/llm.js';
 import { measuredParser, measuredTranscriber } from './core/metrics.js';
 import type { App } from './core/service.js';
@@ -18,8 +19,16 @@ import { openDb } from './db.js';
 const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const MINIAPP_DIST = path.join(ROOT, 'apps/miniapp/dist');
 
+const alert = createAlerts(config.alertTgId, botApiSender(config.botToken));
+
+// база не открылась — сообщаем владельцу и падаем: systemd перезапустит, когда база вернётся
+const db = await openDb(config.databaseUrl || undefined, path.join(ROOT, '.data/pg')).catch(async (err: Error) => {
+  await alert('db', `приложение не может подключиться к базе данных (${err.message.slice(0, 200)}). Бот и миниапп не работают.`);
+  throw err;
+});
+
 const app: App = {
-  db: await openDb(config.databaseUrl || undefined, path.join(ROOT, '.data/pg')),
+  db,
   llm:
     config.llmBaseUrl && config.llmModel
       ? measuredParser(createLlmParser({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, model: config.llmModel }))
@@ -52,7 +61,7 @@ if (config.botToken) {
   const transcriber = createTranscriber();
   const bot = createBot(app, transcriber && measuredTranscriber(transcriber));
   app.send = async (chatId, text) => void (await bot.api.sendMessage(chatId, text));
-  startJobs(app, bot);
+  startJobs(app, bot, alert);
   // кнопка миниаппа слева от поля ввода в чате с ботом
   if (config.webappUrl) {
     await bot.api

@@ -3,6 +3,7 @@ import type { InlineKeyboardMarkup } from 'grammy/types';
 import { config } from './config.js';
 import { formatMoney, quickParse } from './core/parse.js';
 import * as s from './core/service.js';
+import { checkDisk, type Alert } from './core/alerts.js';
 import type { Transcriber } from './core/stt.js';
 import { operationLine, reportText, summaryText, totalsLine } from './core/text.js';
 
@@ -327,8 +328,8 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
   return bot;
 }
 
-/** Раз в минуту: закрывает истёкшие периоды, рассылает сводки и вечерние напоминания. */
-export function startJobs(app: s.App, bot: Bot): NodeJS.Timeout {
+/** Раз в минуту: закрывает истёкшие периоды, рассылает сводки и напоминания; раз в 10 минут проверяет диск. */
+export function startJobs(app: s.App, bot: Bot, alert: Alert): NodeJS.Timeout {
   const send = (chatId: string, text: string, keyboard?: InlineKeyboard) =>
     // чат мог заблокировать бота — это не повод ронять рассылку остальным
     bot.api.sendMessage(chatId, text, { reply_markup: keyboard }).catch((err) => console.error('send failed', chatId, err));
@@ -345,5 +346,12 @@ export function startJobs(app: s.App, bot: Bot): NodeJS.Timeout {
         new InlineKeyboard().text('Не напоминать', 'rem:off'));
     }
   };
-  return setInterval(() => void tick().catch((err) => console.error('jobs failed', err)), 60_000);
+  let ticks = 0;
+  return setInterval(() => {
+    void tick().catch((err) => {
+      console.error('jobs failed', err);
+      void alert('jobs', `фоновые задачи (сводки, напоминания) падают с ошибкой: ${String(err?.message ?? err).slice(0, 300)}`);
+    });
+    if (ticks++ % 10 === 0) void checkDisk(alert).catch((err) => console.error('disk check failed', err));
+  }, 60_000);
 }

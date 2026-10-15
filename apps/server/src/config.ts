@@ -40,6 +40,8 @@ export const config = {
   /** вход в админку: единственные логин и пароль, задаются только в настройках сервера */
   adminLogin: env.ADMIN_LOGIN ?? '',
   adminPassword: env.ADMIN_PASSWORD ?? '',
+  /** Telegram id, куда бот присылает оповещения о проблемах сервера; пусто — не присылать */
+  alertTgId: env.ALERT_TG_ID ?? '',
   // по умолчанию голос распознаёт тот же провайдер, что и LLM
   sttBaseUrl: env.STT_BASE_URL || env.LLM_BASE_URL || '',
   sttApiKey: env.STT_API_KEY || env.LLM_API_KEY || '',
