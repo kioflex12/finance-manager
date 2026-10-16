@@ -554,11 +554,54 @@ async function absorbInto(app: App, roomId: number, item: string, items: string[
  * Окончательная позиция траты: если в описании или в предложенном названии встречается уже существующая
  * позиция — она; иначе предложенная, и тогда она собирает под себя более подробные варианты.
  */
+/** Журналы, где появились новые позиции, — их позиции стоит пересобрать по смыслу (см. flushNewItems). */
+const newItemRooms = new Set<number>();
+
+/** Пересобирает по смыслу журналы с новыми позициями; вызывается после записи трат, не задерживая ответ. */
+export async function flushNewItems(app: App): Promise<void> {
+  for (const roomId of [...newItemRooms]) {
+    newItemRooms.delete(roomId);
+    await groupItemsByMeaning(app, roomId);
+  }
+}
+
 async function resolveItem(app: App, roomId: number, proposed: string, description: string, excludeOpId = 0): Promise<string> {
   const items = await roomItems(app, roomId, excludeOpId);
   const item = containedItem(items, description) ?? containedItem(items, proposed) ?? proposed;
   await absorbInto(app, roomId, item, items);
+  if (!items.includes(item)) newItemRooms.add(roomId);
   return item;
+}
+
+/**
+ * Группировка по смыслу: модель ищет в позициях журнала разновидности других позиций («Лимонад» → «Напитки»)
+ * и они переезжают в общую. Ответ модели проверяется: оба названия должны существовать, общая позиция
+ * не может совпадать с категорией, цепочки и циклы отбрасываются.
+ */
+export async function groupItemsByMeaning(app: App, roomId: number): Promise<number> {
+  if (!app.llm) return 0;
+  const items = await roomItems(app, roomId);
+  if (items.length < 2) return 0;
+  const categories = (await listCategories(app, roomId)).map((c) => c.name);
+  let merges;
+  try {
+    merges = await app.llm.groupItems(items, categories);
+  } catch (err) {
+    console.error('LLM group items failed', err);
+    return 0;
+  }
+  const known = new Set(items);
+  const categoryNames = new Set(categories.map((c) => c.toLowerCase()));
+  const sources = new Set(merges.map((m) => m.from));
+  const valid = merges.filter(
+    (m) => m.from !== m.to && known.has(m.from) && known.has(m.to) && !categoryNames.has(m.to.toLowerCase()) && !sources.has(m.to),
+  );
+  for (const { from, to } of valid) {
+    await app.db.query('UPDATE operations SET item = $1 WHERE room_id = $2 AND item = $3', [to, roomId, from]);
+    await app.db.query('UPDATE rules SET item = $1 WHERE room_id = $2 AND item = $3', [to, roomId, from]);
+  }
+  if (valid.length) notifyRoom(roomId);
+  return valid.length;
 }
 
 /** Наводит порядок в уже записанных позициях всех журналов — запускается при старте, повторный запуск ничего не меняет. */

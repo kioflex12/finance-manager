@@ -31,6 +31,7 @@ export function measuredParser(parser: ExpenseParser): ExpenseParser {
   return {
     parse: (input) => measure(metrics.llm, () => parser.parse(input)),
     categorize: (input) => measure(metrics.llm, () => parser.categorize(input)),
+    groupItems: (items, categories) => measure(metrics.llm, () => parser.groupItems(items, categories)),
   };
 }
 

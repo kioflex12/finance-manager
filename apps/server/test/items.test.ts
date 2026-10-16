@@ -12,7 +12,12 @@ const llm: ExpenseParser = {
     const item = input.text.charAt(0).toUpperCase() + input.text.slice(1);
     return { category: 'Развлечения', item };
   },
+  async groupItems() {
+    return merges;
+  },
 };
+
+let merges: { from: string; to: string }[] = [];
 
 let app: s.App;
 let user: s.User;
@@ -32,6 +37,35 @@ async function add(text: string) {
 
 const items = async () =>
   (await s.listOperations(app, (await s.currentPeriod(app, room.id))!.id)).map((op) => [op.description, op.item]).reverse();
+
+describe('группировка по смыслу', () => {
+  it('разновидности переезжают в общую позицию, ответ модели проверяется', async () => {
+    for (const text of ['100 напитки', '150 лимонад', '200 кола', '300 сыр', '400 капучино', '500 кофе']) await add(text);
+    merges = [
+      { from: 'Лимонад', to: 'Напитки' },
+      { from: 'Кола', to: 'Напитки' },
+      // в категорию не схлопываем
+      { from: 'Сыр', to: 'Развлечения' },
+      // выдуманные названия игнорируются
+      { from: 'Капучино', to: 'Кофейные напитки' },
+      // цепочка: Кофе сам уходит в «Напитки», поэтому «Капучино → Кофе» отбрасывается
+      { from: 'Кофе', to: 'Напитки' },
+      { from: 'Капучино', to: 'Кофе' },
+    ];
+    expect(await s.groupItemsByMeaning(app, room.id)).toBe(3);
+    expect((await items()).map(([, item]) => item)).toEqual(['Напитки', 'Напитки', 'Напитки', 'Сыр', 'Капучино', 'Напитки']);
+    merges = [];
+  });
+
+  it('новая позиция запускает пересборку журнала в фоне', async () => {
+    await add('150 лимонад');
+    merges = [{ from: 'Лимонад', to: 'Напитки' }];
+    await add('100 напитки');
+    await s.flushNewItems(app);
+    expect((await items()).map(([, item]) => item)).toEqual(['Напитки', 'Напитки']);
+    merges = [];
+  });
+});
 
 describe('позиции собираются по общему признаку', () => {
   it('containedItem находит существующую позицию внутри описания, целыми словами', () => {
