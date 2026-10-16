@@ -9,6 +9,9 @@ APP_DIR=/opt/finance-manager
 ARCHIVE="$(mktemp -d)/release.tgz"
 
 cd "$(dirname "$0")/.."
+# упавший тест останавливает выкладку (set -e)
+npm run typecheck
+npm test
 npm run build
 tar --force-local -czf "$ARCHIVE" package.json package-lock.json \
   apps/server/package.json apps/server/dist apps/server/migrations \

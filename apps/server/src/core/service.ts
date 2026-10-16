@@ -535,8 +535,10 @@ export function containedItem(items: string[], text: string): string | null {
   return best;
 }
 
-async function roomItems(app: App, roomId: number): Promise<string[]> {
-  return (await app.db.query<{ item: string }>('SELECT DISTINCT item FROM operations WHERE room_id = $1', [roomId])).map((r) => r.item);
+/** Позиции журнала; excludeOpId — не учитывать саму трату, у которой пока временное название. */
+async function roomItems(app: App, roomId: number, excludeOpId = 0): Promise<string[]> {
+  const rows = await app.db.query<{ item: string }>('SELECT DISTINCT item FROM operations WHERE room_id = $1 AND id <> $2', [roomId, excludeOpId]);
+  return rows.map((r) => r.item);
 }
 
 /** Позиция забирает траты, в названии которых она целиком встречается: «Мафия» ← «Капитанский стол Мафия». */
@@ -552,8 +554,8 @@ async function absorbInto(app: App, roomId: number, item: string, items: string[
  * Окончательная позиция траты: если в описании или в предложенном названии встречается уже существующая
  * позиция — она; иначе предложенная, и тогда она собирает под себя более подробные варианты.
  */
-async function resolveItem(app: App, roomId: number, proposed: string, description: string): Promise<string> {
-  const items = await roomItems(app, roomId);
+async function resolveItem(app: App, roomId: number, proposed: string, description: string, excludeOpId = 0): Promise<string> {
+  const items = await roomItems(app, roomId, excludeOpId);
   const item = containedItem(items, description) ?? containedItem(items, proposed) ?? proposed;
   await absorbInto(app, roomId, item, items);
   return item;
@@ -679,7 +681,8 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   const guess = categories.find((c) => c.name === answer?.category);
   const category = guess ?? other;
   if (!category) return op;
-  const item = await resolveItem(app, op.roomId, toItem(answer?.item, op.description), op.description);
+  // временное название этой же траты (её описание) не должно перебить название от модели
+  const item = await resolveItem(app, op.roomId, toItem(answer?.item, op.description), op.description, op.id);
   await app.db.query('UPDATE operations SET item = $1 WHERE id = $2', [item, opId]);
   // пользователь мог успеть выбрать категорию сам, пока думала модель
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2 AND category_id IS NULL', [category.id, opId]);
