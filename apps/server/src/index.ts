@@ -12,7 +12,7 @@ import { config } from './config.js';
 import { botApiSender, createAlerts } from './core/alerts.js';
 import { createLlmParser } from './core/llm.js';
 import { measuredParser, measuredTranscriber } from './core/metrics.js';
-import type { App } from './core/service.js';
+import { regroupItems, type App } from './core/service.js';
 import { createTranscriber } from './core/stt.js';
 import { openDb } from './db.js';
 
@@ -34,6 +34,9 @@ const app: App = {
       ? measuredParser(createLlmParser({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, model: config.llmModel }))
       : null,
 };
+// позиции, записанные до правила «общий признак», собираем в общие (быстро, при повторе ничего не меняет)
+await regroupItems(app).catch((err) => console.error('regroup items failed', err));
+
 if (!app.llm) console.warn('LLM_BASE_URL и LLM_MODEL не заданы: работает только быстрый разбор вида «400 продукты»');
 
 const http = new Hono();

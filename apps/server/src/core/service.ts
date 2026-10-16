@@ -517,6 +517,58 @@ export function displayName(text: string): string {
 }
 
 /** Позиция: название от модели («кофеёчек» → «Кофе»), а без неё — само описание в едином виде. */
+const itemWords = (text: string) => ruleKey(text).split(' ').filter(Boolean);
+
+/**
+ * Позиция из уже существующих, чьё название целиком (по словам) входит в текст: для «капитанский стол мафия»
+ * при существующей «Мафия» — «Мафия». Из нескольких подходящих берётся самая подробная.
+ */
+export function containedItem(items: string[], text: string): string | null {
+  const haystack = ` ${itemWords(text).join(' ')} `;
+  let best: string | null = null;
+  for (const item of items) {
+    const words = itemWords(item);
+    // совсем короткие названия («Чай» — да, «Ок» — нет) дают случайные совпадения
+    if (words.join('').length < 3) continue;
+    if (haystack.includes(` ${words.join(' ')} `) && (!best || words.length > itemWords(best).length)) best = item;
+  }
+  return best;
+}
+
+async function roomItems(app: App, roomId: number): Promise<string[]> {
+  return (await app.db.query<{ item: string }>('SELECT DISTINCT item FROM operations WHERE room_id = $1', [roomId])).map((r) => r.item);
+}
+
+/** Позиция забирает траты, в названии которых она целиком встречается: «Мафия» ← «Капитанский стол Мафия». */
+async function absorbInto(app: App, roomId: number, item: string, items: string[]): Promise<void> {
+  const absorbed = items.filter((other) => other !== item && containedItem([item], other) === item);
+  if (!absorbed.length) return;
+  await app.db.query('UPDATE operations SET item = $1 WHERE room_id = $2 AND item = ANY($3)', [item, roomId, absorbed]);
+  await app.db.query('UPDATE rules SET item = $1 WHERE room_id = $2 AND item = ANY($3)', [item, roomId, absorbed]);
+  notifyRoom(roomId);
+}
+
+/**
+ * Окончательная позиция траты: если в описании или в предложенном названии встречается уже существующая
+ * позиция — она; иначе предложенная, и тогда она собирает под себя более подробные варианты.
+ */
+async function resolveItem(app: App, roomId: number, proposed: string, description: string): Promise<string> {
+  const items = await roomItems(app, roomId);
+  const item = containedItem(items, description) ?? containedItem(items, proposed) ?? proposed;
+  await absorbInto(app, roomId, item, items);
+  return item;
+}
+
+/** Наводит порядок в уже записанных позициях всех журналов — запускается при старте, повторный запуск ничего не меняет. */
+export async function regroupItems(app: App): Promise<void> {
+  const rooms = await app.db.query<{ id: number }>('SELECT DISTINCT room_id AS id FROM operations');
+  for (const { id } of rooms) {
+    // от общих названий к подробным: короткое забирает длинные
+    const items = (await roomItems(app, id)).sort((a, b) => itemWords(a).length - itemWords(b).length);
+    for (const item of items) await absorbInto(app, id, item, await roomItems(app, id));
+  }
+}
+
 function toItem(item: string | null | undefined, description: string): string {
   return displayName(item ?? '') || displayName(description) || displayName(NO_DESCRIPTION);
 }
@@ -594,7 +646,7 @@ export async function addFromText(app: App, room: Room, user: User, text: string
   if (quick) {
     const rule = quick.description ? await findRule(app, room.id, quick.description) : null;
     const categoryId = quick.description ? (rule?.categoryId ?? null) : (other?.id ?? null);
-    const item = toItem(rule?.item, quick.description);
+    const item = await resolveItem(app, room.id, toItem(rule?.item, quick.description), quick.description);
     const op = await insertOperation(app, period, user, quick.amount, quick.description || NO_DESCRIPTION, categoryId, item);
     return categoryId === null ? { status: 'ok', ops: [op], pendingOpId: op.id } : { status: 'ok', ops: [op] };
   }
@@ -608,7 +660,7 @@ export async function addFromText(app: App, room: Room, user: User, text: string
     const category = categories.find((c) => c.name === found.category) ?? other;
     // выученное правило сильнее догадки модели
     const rule = await findRule(app, room.id, found.description);
-    const item = toItem(rule?.item ?? found.item, found.description);
+    const item = await resolveItem(app, room.id, toItem(rule?.item ?? found.item, found.description), found.description);
     ops.push(
       await insertOperation(app, period, user, amount, found.description || NO_DESCRIPTION, rule?.categoryId ?? category?.id ?? null, item),
     );
@@ -627,7 +679,7 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   const guess = categories.find((c) => c.name === answer?.category);
   const category = guess ?? other;
   if (!category) return op;
-  const item = toItem(answer?.item, op.description);
+  const item = await resolveItem(app, op.roomId, toItem(answer?.item, op.description), op.description);
   await app.db.query('UPDATE operations SET item = $1 WHERE id = $2', [item, opId]);
   // пользователь мог успеть выбрать категорию сам, пока думала модель
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2 AND category_id IS NULL', [category.id, opId]);
