@@ -15,6 +15,7 @@ import {
   type Room,
   type RoomColor,
   type RoomView,
+  type Stats,
   roomEventsUrl,
 } from './api';
 import {
@@ -74,7 +75,8 @@ export function App() {
   // undefined — экран категории закрыт; null — «без категории»
   const [category, setCategory] = useState<Category | null | undefined>();
   // фильтр ленты трат по участнику общей комнаты
-  const [memberFilter, setMemberFilter] = useState<string | null>(null);
+  // фильтр общего журнала по участнику (id пользователя); действует на все вкладки, пока его не сняли
+  const [memberFilter, setMemberFilter] = useState<number | null>(null);
   const [adding, setAdding] = useState(location.hash === '#add');
   const [creating, setCreating] = useState(false);
   const [configuring, setConfiguring] = useState(false);
@@ -167,11 +169,10 @@ export function App() {
     };
   }, [roomId, reload]);
 
-  /** Переход на вкладку нижней панели: всегда с самого начала — без вложенного экрана, фильтров и прокрутки. */
+  /** Переход на вкладку нижней панели: всегда с самого начала — без вложенного экрана и прокрутки. Фильтр по человеку остаётся. */
   function go(next: Tab) {
     tg?.HapticFeedback?.selectionChanged();
     setCategory(undefined);
-    setMemberFilter(null);
     setTab(next);
     window.scrollTo({ top: 0 });
   }
@@ -193,13 +194,23 @@ export function App() {
   const colorOf: ColorOf = (c) => categoryColor(c, view.categories);
   const shared = view.members.length > 1;
   const onMain = category === undefined;
+  // выбранный человек мог выйти из журнала — тогда фильтр не действует
+  const member = shared ? view.members.find((m) => m.id === memberFilter) : undefined;
+  const visibleOps = member ? operations.filter((op) => op.userId === member.id) : operations;
+  // при фильтре суммы считаются по тратам человека; бюджет — общий на журнал, поэтому его не показываем
+  const visibleView: RoomView = member && view.stats ? { ...view, stats: { ...statsOf(visibleOps), byMember: view.stats.byMember }, budget: null } : view;
+  const toggleMember = (id: number) => {
+    tg?.HapticFeedback?.selectionChanged();
+    setMemberFilter(memberFilter === id ? null : id);
+  };
 
   return (
     <div className="app" style={roomVars(room.color)}>
       {category !== undefined ? (
         <CategoryScreen
           category={category}
-          operations={operations.filter((op) => (op.category?.id ?? null) === (category?.id ?? null))}
+          operations={visibleOps.filter((op) => (op.category?.id ?? null) === (category?.id ?? null))}
+          memberName={member?.name}
           color={colorOf(category)}
           shared={shared}
           onBack={() => setCategory(undefined)}
@@ -220,10 +231,27 @@ export function App() {
             )}
           </header>
 
+          {shared && tab !== 'room' && (
+            <div className="member-filter">
+              <div className="chips">
+                <button className={member ? 'chip' : 'chip active'} onClick={() => setMemberFilter(null)}>
+                  Все
+                </button>
+                {view.members.map((m) => (
+                  <button key={m.id} className={member?.id === m.id ? 'chip active' : 'chip'} onClick={() => toggleMember(m.id)}>
+                    {m.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {tab === 'home' && (
             <Home
-              view={view}
-              operations={operations}
+              view={visibleView}
+              memberName={member?.name}
+              memberFilter={member?.id ?? null}
+              onMember={toggleMember}
+              operations={visibleOps}
               viewingHistory={viewingHistory}
               colorOf={colorOf}
               shared={shared}
@@ -233,11 +261,7 @@ export function App() {
                 window.scrollTo({ top: 0 });
               }}
               onEdit={setEditing}
-              onShowAll={(member) => {
-                go('ops');
-                // фильтр ставим после перехода: go() сбрасывает фильтры вкладки
-                setMemberFilter(member ?? null);
-              }}
+              onShowAll={() => go('ops')}
               onChoosePeriod={() => setChoosingPeriod(true)}
               onBackToCurrent={() => setPeriodId(undefined)}
               onSetBudget={() => setConfiguring(true)}
@@ -251,10 +275,7 @@ export function App() {
               viewingHistory={viewingHistory}
               onChoosePeriod={() => setChoosingPeriod(true)}
               onBackToCurrent={() => setPeriodId(undefined)}
-              operations={operations}
-              members={shared ? view.members.map((m) => m.name) : []}
-              member={memberFilter}
-              onMember={setMemberFilter}
+              operations={visibleOps}
               colorOf={colorOf}
               shared={shared}
               onEdit={setEditing}
@@ -371,7 +392,11 @@ function Home(props: {
   shared: boolean;
   onOpenCategory: (category: Category | null) => void;
   onEdit: (op: Operation) => void;
-  onShowAll: (member?: string) => void;
+  onShowAll: () => void;
+  /** имя выбранного в фильтре человека: суммы на экране — только его */
+  memberName?: string;
+  memberFilter: number | null;
+  onMember: (userId: number) => void;
   onChoosePeriod: () => void;
   onBackToCurrent: () => void;
   onSetBudget: () => void;
@@ -406,7 +431,10 @@ function Home(props: {
           {period.label} <Icon name="chevron" size={14} />
         </button>
         <button className="hero-total" onClick={() => props.onShowAll()}>
-          <span className="hero-label">{viewingHistory ? 'Потрачено за период' : 'Потрачено'}</span>
+          <span className="hero-label">
+            {viewingHistory ? 'Потрачено за период' : 'Потрачено'}
+            {props.memberName && ` · ${props.memberName}`}
+          </span>
           <span className="hero-amount">{money(stats.total)}</span>
         </button>
         {budget ? (
@@ -436,7 +464,8 @@ function Home(props: {
             ← К текущему периоду
           </button>
         ) : (
-          !budget && (
+          !budget &&
+          !props.memberName && (
             <button className="hero-link" onClick={props.onSetBudget}>
               Задать бюджет на период
             </button>
@@ -444,7 +473,12 @@ function Home(props: {
         )}
       </section>
 
-      {stats.count === 0 ? (
+      {stats.count === 0 && props.memberName ? (
+        <div className="card empty-state">
+          <div className="big-emoji">🧾</div>
+          <p className="muted">У {props.memberName} в этом периоде трат нет.</p>
+        </div>
+      ) : stats.count === 0 ? (
         <button className="card empty-state pressable" disabled={viewingHistory} onClick={props.onAdd}>
           <div className="big-emoji">🧾</div>
           <h2>Пока нет трат</h2>
@@ -491,16 +525,16 @@ function Home(props: {
               <h3 className="section">Участники</h3>
               <ul className="card rows">
                 {stats.byMember.map((m) => (
-                  <li key={m.userId} onClick={() => props.onShowAll(m.name)}>
+                  <li key={m.userId} className={props.memberFilter === m.userId ? 'picked' : ''} onClick={() => props.onMember(m.userId)}>
                     <span className="avatar small">{m.name.charAt(0).toUpperCase()}</span>
                     <span className="grow">
                       <span className="title">{m.name}</span>
-                      <small>{share(m.total, stats.total)}</small>
+                      <small>
+                        {share(m.total, stats.byMember.reduce((all, x) => all + x.total, 0))}
+                        {props.memberFilter === m.userId ? ' · показаны только его траты' : ' · нажмите, чтобы показать только его траты'}
+                      </small>
                     </span>
                     <b>{money(m.total)}</b>
-                    <span className="chev">
-                      <Icon name="right" size={16} />
-                    </span>
                   </li>
                 ))}
               </ul>
@@ -532,6 +566,28 @@ function plural(n: number, one: string, few: string, many: string): string {
 }
 
 const sum = (operations: Operation[]) => operations.reduce((total, op) => total + op.amount, 0);
+
+/** Итоги по набору трат — для фильтра по человеку, когда считать нужно только его траты. */
+function statsOf(operations: Operation[]): Stats {
+  const byCategory = new Map<number, Stats['byCategory'][number]>();
+  const byMember = new Map<number, Stats['byMember'][number]>();
+  for (const op of operations) {
+    const key = op.category?.id ?? 0;
+    const row = byCategory.get(key) ?? { category: op.category, total: 0, count: 0 };
+    row.total += op.amount;
+    row.count += 1;
+    byCategory.set(key, row);
+    const person = byMember.get(op.userId) ?? { userId: op.userId, name: op.userName, total: 0 };
+    person.total += op.amount;
+    byMember.set(op.userId, person);
+  }
+  return {
+    total: sum(operations),
+    count: operations.length,
+    byCategory: [...byCategory.values()].sort((a, b) => b.total - a.total),
+    byMember: [...byMember.values()].sort((a, b) => b.total - a.total),
+  };
+}
 
 /** Исходные слова совпадают с названием траты — показывать их отдельно незачем. */
 const sameWords = (op: Operation) => op.description.toLowerCase().replace(/ё/g, 'е') === op.item.toLowerCase().replace(/ё/g, 'е');
@@ -570,16 +626,11 @@ function Operations(props: {
   onChoosePeriod: () => void;
   onBackToCurrent: () => void;
   operations: Operation[];
-  /** имена участников для фильтра; пусто в личной комнате */
-  members: string[];
-  member: string | null;
-  onMember: (member: string | null) => void;
   colorOf: ColorOf;
   shared: boolean;
   onEdit: (op: Operation) => void;
 }) {
-  const { member } = props;
-  const operations = member ? props.operations.filter((op) => op.userName === member) : props.operations;
+  const { operations } = props;
   return (
     <main className="page">
       <div className="title-row">
@@ -592,18 +643,6 @@ function Operations(props: {
         <button className="past-banner" onClick={props.onBackToCurrent}>
           Прошлый период · вернуться к текущему
         </button>
-      )}
-      {props.members.length > 0 && (
-        <div className="chips filter">
-          <button className={member === null ? 'chip active' : 'chip'} onClick={() => props.onMember(null)}>
-            Все
-          </button>
-          {props.members.map((name) => (
-            <button key={name} className={member === name ? 'chip active' : 'chip'} onClick={() => props.onMember(name)}>
-              {name}
-            </button>
-          ))}
-        </div>
       )}
       {operations.length ? (
         <DayGroups operations={operations} colorOf={props.colorOf} shared={props.shared} onEdit={props.onEdit} />
@@ -621,6 +660,7 @@ function Operations(props: {
 function CategoryScreen(props: {
   category: Category | null;
   operations: Operation[];
+  memberName?: string;
   color: string;
   shared: boolean;
   onBack: () => void;
@@ -661,6 +701,7 @@ function CategoryScreen(props: {
           <h1>{category?.name ?? 'Без категории'}</h1>
           <span className="muted">
             {money(total)} · {operations.length} {plural(operations.length, 'трата', 'траты', 'трат')}
+            {props.memberName && ` · ${props.memberName}`}
           </span>
         </div>
       </div>

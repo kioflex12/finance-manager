@@ -48,6 +48,7 @@ export interface Category {
 
 export interface Operation {
   id: number;
+  userId: number;
   userName: string;
   amount: number;
   description: string;
