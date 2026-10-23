@@ -95,6 +95,41 @@ describe('API', () => {
     expect((await call(2, 'PATCH', `/operations/${opId}`, { amount: 100 })).status).toBe(404);
   });
 
+  it('можно изменить все поля траты, создать и переименовать категорию', async () => {
+    const roomId = (await (await call(1, 'GET', '/me')).json()).activeRoomId;
+    const added = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '400 автобус' })).json();
+    const opId = added.operations[0].id;
+    const createdResponse = await call(1, 'POST', `/rooms/${roomId}/categories`, { name: 'поездки' });
+    expect(createdResponse.status).toBe(200);
+    const created = (await createdResponse.json()).category;
+
+    const patchedResponse = await call(1, 'PATCH', `/operations/${opId}`, {
+      amount: 45050,
+      description: 'автобус до работы',
+      item: 'автобус',
+      categoryId: created.id,
+    });
+    expect(patchedResponse.status).toBe(200);
+    expect((await patchedResponse.json()).operation).toMatchObject({
+      amount: 45050,
+      description: 'автобус до работы',
+      item: 'Автобус',
+      category: { id: created.id, name: 'Поездки' },
+    });
+
+    const renamed = await call(1, 'PATCH', `/rooms/${roomId}/categories/${created.id}`, { name: 'общественный транспорт' });
+    expect((await renamed.json()).category.name).toBe('Общественный транспорт');
+    expect((await call(1, 'PATCH', `/rooms/${roomId}/categories/${created.id}`, { name: 'продукты' })).status).toBe(422);
+    const again = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '50 автобус до работы' })).json();
+    expect(again.operations[0]).toMatchObject({ item: 'Автобус', category: { name: 'Общественный транспорт' } });
+
+    expect((await call(1, 'PATCH', `/operations/${opId}`, { description: '  ' })).status).toBe(422);
+    expect((await call(1, 'PATCH', `/operations/${opId}`, { item: '' })).status).toBe(422);
+    const duplicate = await (await call(1, 'POST', `/rooms/${roomId}/categories`, { name: 'продукты' })).json();
+    expect(duplicate.category.name).toBe('Продукты');
+    expect((await call(2, 'POST', `/rooms/${roomId}/categories`, { name: 'Чужое' })).status).toBe(404);
+  });
+
   it('чужие комнаты и операции недоступны, пока не вступил по приглашению', async () => {
     const roomId = (await (await call(1, 'GET', '/me')).json()).activeRoomId;
     const added = await (await call(1, 'POST', `/rooms/${roomId}/operations`, { text: '400 продукты' })).json();

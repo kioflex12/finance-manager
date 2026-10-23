@@ -184,6 +184,22 @@ export function createApi(app: s.App): Hono<Env> {
     });
   });
 
+  api.post('/rooms/:roomId/categories', async (c) => {
+    const room = await memberRoom(c.get('user'), c.req.param('roomId'));
+    if (!room) return c.json({ error: 'not_found' }, 404);
+    const body = await c.req.json<{ name?: string }>();
+    const category = await s.createCategory(app, room.id, typeof body.name === 'string' ? body.name : '');
+    return category ? c.json({ category }) : c.json({ error: 'bad_category' }, 422);
+  });
+
+  api.patch('/rooms/:roomId/categories/:categoryId', async (c) => {
+    const room = await memberRoom(c.get('user'), c.req.param('roomId'));
+    if (!room) return c.json({ error: 'not_found' }, 404);
+    const body = await c.req.json<{ name?: string }>();
+    const category = await s.renameCategory(app, room.id, Number(c.req.param('categoryId')), typeof body.name === 'string' ? body.name : '');
+    return category ? c.json({ category }) : c.json({ error: 'bad_category' }, 422);
+  });
+
   api.get('/rooms/:roomId/periods', async (c) => {
     const room = await memberRoom(c.get('user'), c.req.param('roomId'));
     if (!room) return c.json({ error: 'not_found' }, 404);
@@ -224,16 +240,14 @@ export function createApi(app: s.App): Hono<Env> {
   api.patch('/operations/:opId', async (c) => {
     const op = await memberOperation(c.get('user'), c.req.param('opId'));
     if (!op) return c.json({ error: 'not_found' }, 404);
-    const body = await c.req.json<{ categoryId?: number; amount?: number }>();
-    let updated: s.Operation | null = op;
-    if (body.amount !== undefined) {
-      updated = await s.setAmount(app, op, Math.round(Number(body.amount)));
-      if (!updated) return c.json({ error: 'bad_amount' }, 422);
-    }
-    if (body.categoryId !== undefined) {
-      updated = await s.setCategory(app, updated, Number(body.categoryId));
-      if (!updated) return c.json({ error: 'bad_category' }, 422);
-    }
+    const body = await c.req.json<{ categoryId?: number; amount?: number; description?: string; item?: string }>();
+    const updated = await s.updateOperation(app, op, {
+      amount: body.amount === undefined ? undefined : Math.round(Number(body.amount)),
+      categoryId: body.categoryId === undefined ? undefined : Number(body.categoryId),
+      description: typeof body.description === 'string' ? body.description : undefined,
+      item: typeof body.item === 'string' ? body.item : undefined,
+    });
+    if (!updated) return c.json({ error: 'bad_operation' }, 422);
     return c.json({ operation: updated });
   });
 

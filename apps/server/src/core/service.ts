@@ -336,6 +336,37 @@ export async function listCategories(app: App, roomId: number): Promise<Category
   return app.db.query<Category>('SELECT id, name, emoji FROM categories WHERE room_id = $1 ORDER BY id', [roomId]);
 }
 
+export async function createCategory(app: App, roomId: number, name: string): Promise<Category | null> {
+  const clean = displayName(name);
+  if (!clean) return null;
+  const [existing] = await app.db.query<Category>(
+    'SELECT id, name, emoji FROM categories WHERE room_id = $1 AND lower(name) = lower($2)',
+    [roomId, clean],
+  );
+  if (existing) return existing;
+  const [category] = await app.db.query<Category>(
+    `INSERT INTO categories (room_id, name, emoji) VALUES ($1, $2, '🏷')
+     ON CONFLICT (room_id, name) DO NOTHING RETURNING id, name, emoji`,
+    [roomId, clean],
+  );
+  if (category) notifyRoom(roomId);
+  return category ?? null;
+}
+
+/** Переименование категории действует на все её траты и выученные правила журнала. */
+export async function renameCategory(app: App, roomId: number, categoryId: number, name: string): Promise<Category | null> {
+  const clean = displayName(name);
+  if (!clean || !Number.isSafeInteger(categoryId)) return null;
+  const [category] = await app.db.query<Category>(
+    `UPDATE categories SET name = $3 WHERE room_id = $1 AND id = $2
+       AND NOT EXISTS (SELECT 1 FROM categories other WHERE other.room_id = $1 AND other.id <> $2 AND lower(other.name) = lower($3))
+     RETURNING id, name, emoji`,
+    [roomId, categoryId, clean],
+  );
+  if (category) notifyRoom(roomId);
+  return category ?? null;
+}
+
 // ---------- периоды ----------
 
 export function periodBounds(room: Pick<Room, 'periodKind' | 'periodDays' | 'tzOffsetMin'>, from: Date): { start: Date; end: Date } {
@@ -497,11 +528,12 @@ async function insertOperation(
   description: string,
   categoryId: number | null,
   item: string,
+  itemLocked = false,
 ): Promise<Operation> {
   const [row] = await app.db.query<{ id: number }>(
-    `INSERT INTO operations (room_id, period_id, user_id, amount, description, category_id, item)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-    [period.roomId, period.id, user.id, amount, description.slice(0, 200), categoryId, item],
+    `INSERT INTO operations (room_id, period_id, user_id, amount, description, category_id, item, item_locked)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [period.roomId, period.id, user.id, amount, description.slice(0, 200), categoryId, item, itemLocked],
   );
   notifyRoom(period.roomId);
   return (await getOperation(app, row!.id))!;
@@ -535,94 +567,131 @@ export function containedItem(items: string[], text: string): string | null {
   return best;
 }
 
-/** Позиции журнала; excludeOpId — не учитывать саму трату, у которой пока временное название. */
-async function roomItems(app: App, roomId: number, excludeOpId = 0): Promise<string[]> {
-  const rows = await app.db.query<{ item: string }>('SELECT DISTINCT item FROM operations WHERE room_id = $1 AND id <> $2', [roomId, excludeOpId]);
+/** Позиции журнала или одной категории; excludeOpId — не учитывать временное название самой траты. */
+async function roomItems(app: App, roomId: number, categoryId?: number | null, excludeOpId = 0): Promise<string[]> {
+  const rows =
+    categoryId === undefined
+      ? await app.db.query<{ item: string }>('SELECT DISTINCT item FROM operations WHERE room_id = $1 AND id <> $2', [roomId, excludeOpId])
+      : await app.db.query<{ item: string }>(
+          'SELECT DISTINCT item FROM operations WHERE room_id = $1 AND id <> $2 AND category_id IS NOT DISTINCT FROM $3',
+          [roomId, excludeOpId, categoryId],
+        );
   return rows.map((r) => r.item);
 }
 
-/** Позиция забирает траты, в названии которых она целиком встречается: «Мафия» ← «Капитанский стол Мафия». */
-async function absorbInto(app: App, roomId: number, item: string, items: string[]): Promise<void> {
+/** Позиция забирает подробные варианты только внутри своей категории; ручные правки не трогаем. */
+async function absorbInto(app: App, roomId: number, item: string, items: string[], categoryId: number | null): Promise<void> {
   const absorbed = items.filter((other) => other !== item && containedItem([item], other) === item);
   if (!absorbed.length) return;
-  await app.db.query('UPDATE operations SET item = $1 WHERE room_id = $2 AND item = ANY($3)', [item, roomId, absorbed]);
-  await app.db.query('UPDATE rules SET item = $1 WHERE room_id = $2 AND item = ANY($3)', [item, roomId, absorbed]);
+  await app.db.query(
+    'UPDATE operations SET item = $1 WHERE room_id = $2 AND item = ANY($3) AND category_id IS NOT DISTINCT FROM $4 AND NOT item_locked',
+    [item, roomId, absorbed, categoryId],
+  );
+  await app.db.query(
+    'UPDATE rules SET item = $1 WHERE room_id = $2 AND item = ANY($3) AND category_id IS NOT DISTINCT FROM $4 AND NOT by_user',
+    [item, roomId, absorbed, categoryId],
+  );
   notifyRoom(roomId);
 }
 
-/**
- * Окончательная позиция траты: если в описании или в предложенном названии встречается уже существующая
- * позиция — она; иначе предложенная, и тогда она собирает под себя более подробные варианты.
- */
-/** Журналы, где появились новые позиции, — их позиции стоит пересобрать по смыслу (см. flushNewItems). */
-const newItemRooms = new Set<number>();
-
-/** Пересобирает по смыслу журналы с новыми позициями; вызывается после записи трат, не задерживая ответ. */
-export async function flushNewItems(app: App): Promise<void> {
-  for (const roomId of [...newItemRooms]) {
-    newItemRooms.delete(roomId);
-    await groupItemsByMeaning(app, roomId);
-  }
-}
-
-async function resolveItem(app: App, roomId: number, proposed: string, description: string, excludeOpId = 0): Promise<string> {
-  const items = await roomItems(app, roomId, excludeOpId);
+/** Общие слова объединяем только внутри категории, чтобы «Мафия» не могла попасть в «Напитки». */
+async function resolveItem(
+  app: App,
+  roomId: number,
+  proposed: string,
+  description: string,
+  categoryId: number | null,
+  excludeOpId = 0,
+): Promise<string> {
+  const items = await roomItems(app, roomId, categoryId, excludeOpId);
   const item = containedItem(items, description) ?? containedItem(items, proposed) ?? proposed;
-  await absorbInto(app, roomId, item, items);
-  if (!items.includes(item)) newItemRooms.add(roomId);
+  await absorbInto(app, roomId, item, items, categoryId);
   return item;
 }
 
 /**
- * Группировка по смыслу: модель ищет в позициях журнала разновидности других позиций («Лимонад» → «Напитки»)
- * и они переезжают в общую. Ответ модели проверяется: оба названия должны существовать, общая позиция
- * не может совпадать с категорией, цепочки и циклы отбрасываются.
+ * Явная пересборка по смыслу через dist/regroup: каждая категория обрабатывается отдельно,
+ * ручные правки и правила пользователя не изменяются. Автоматически после трат это не запускается:
+ * маленькая модель могла объявить разные позиции («Автобус» и «Такси») одной и переписать журнал.
  */
 export async function groupItemsByMeaning(app: App, roomId: number): Promise<number> {
   if (!app.llm) return 0;
-  const items = await roomItems(app, roomId);
-  if (items.length < 2) return 0;
-  const categories = (await listCategories(app, roomId)).map((c) => c.name);
-  let merges;
-  try {
-    merges = await app.llm.groupItems(items, categories);
-  } catch (err) {
-    console.error('LLM group items failed', err);
-    return 0;
-  }
-  const known = new Set(items);
-  const categoryNames = new Set(categories.map((c) => c.toLowerCase()));
-  const sources = new Set(merges.map((m) => m.from));
-  const valid = merges.filter(
-    (m) => m.from !== m.to && known.has(m.from) && known.has(m.to) && !categoryNames.has(m.to.toLowerCase()) && !sources.has(m.to),
+  const rows = await app.db.query<{ item: string; categoryId: number | null }>(
+    `SELECT item, category_id AS "categoryId" FROM operations
+     WHERE room_id = $1 AND NOT item_locked GROUP BY item, category_id`,
+    [roomId],
   );
-  for (const { from, to } of valid) {
-    await app.db.query('UPDATE operations SET item = $1 WHERE room_id = $2 AND item = $3', [to, roomId, from]);
-    await app.db.query('UPDATE rules SET item = $1 WHERE room_id = $2 AND item = $3', [to, roomId, from]);
+  const categories = await listCategories(app, roomId);
+  const groups = new Map<number | null, string[]>();
+  for (const row of rows) groups.set(row.categoryId, [...(groups.get(row.categoryId) ?? []), row.item]);
+  let merged = 0;
+  for (const [categoryId, items] of groups) {
+    if (items.length < 2) continue;
+    const categoryName = categories.find((c) => c.id === categoryId)?.name ?? '';
+    let merges;
+    try {
+      merges = await app.llm.groupItems(items, categoryName ? [categoryName] : []);
+    } catch (err) {
+      console.error('LLM group items failed', err);
+      continue;
+    }
+    const known = new Set(items);
+    const sources = new Set(merges.map((m) => m.from));
+    const valid = merges.filter(
+      (m) => m.from !== m.to && known.has(m.from) && known.has(m.to) && m.to.toLowerCase() !== categoryName.toLowerCase() && !sources.has(m.to),
+    );
+    for (const { from, to } of valid) {
+      await app.db.query(
+        'UPDATE operations SET item = $1 WHERE room_id = $2 AND item = $3 AND category_id IS NOT DISTINCT FROM $4 AND NOT item_locked',
+        [to, roomId, from, categoryId],
+      );
+      await app.db.query(
+        'UPDATE rules SET item = $1 WHERE room_id = $2 AND item = $3 AND category_id IS NOT DISTINCT FROM $4 AND NOT by_user',
+        [to, roomId, from, categoryId],
+      );
+    }
+    merged += valid.length;
   }
-  if (valid.length) notifyRoom(roomId);
-  return valid.length;
+  if (merged) notifyRoom(roomId);
+  return merged;
 }
 
-/** Наводит порядок в уже записанных позициях всех журналов — запускается при старте, повторный запуск ничего не меняет. */
+/** Наводит порядок по общим словам при старте, отдельно в каждой категории. */
 export async function regroupItems(app: App): Promise<void> {
   const rooms = await app.db.query<{ id: number }>('SELECT DISTINCT room_id AS id FROM operations');
   for (const { id } of rooms) {
-    // от общих названий к подробным: короткое забирает длинные
-    const items = (await roomItems(app, id)).sort((a, b) => itemWords(a).length - itemWords(b).length);
-    for (const item of items) await absorbInto(app, id, item, await roomItems(app, id));
+    const groups = await app.db.query<{ categoryId: number | null }>(
+      'SELECT DISTINCT category_id AS "categoryId" FROM operations WHERE room_id = $1',
+      [id],
+    );
+    for (const { categoryId } of groups) {
+      const items = (await roomItems(app, id, categoryId)).sort((a, b) => itemWords(a).length - itemWords(b).length);
+      for (const item of items) await absorbInto(app, id, item, await roomItems(app, id, categoryId), categoryId);
+    }
   }
 }
 
 function toItem(item: string | null | undefined, description: string): string {
-  return displayName(item ?? '') || displayName(description) || displayName(NO_DESCRIPTION);
+  const literal = displayName(description) || displayName(NO_DESCRIPTION);
+  const proposed = displayName(item ?? '');
+  if (itemWords(description).length !== 1 || !proposed) return proposed || literal;
+  const source = ruleKey(description);
+  const target = ruleKey(proposed);
+  let prefix = 0;
+  while (prefix < source.length && source[prefix] === target[prefix]) prefix++;
+  // Словоформу («кофеёчек» → «Кофе») принимаем, а подмену смысла («автобус» → «Такси») — нет.
+  return source === target || prefix >= 4 ? proposed : literal;
 }
 
-async function findRule(app: App, roomId: number, description: string): Promise<{ categoryId: number; item: string | null } | null> {
+async function findRule(
+  app: App,
+  roomId: number,
+  description: string,
+): Promise<{ categoryId: number; item: string | null; byUser: boolean } | null> {
   const key = ruleKey(description);
   if (!key) return null;
-  const [rule] = await app.db.query<{ categoryId: number; item: string | null }>(
-    'SELECT category_id AS "categoryId", item FROM rules WHERE room_id = $1 AND key = $2',
+  const [rule] = await app.db.query<{ categoryId: number; item: string | null; byUser: boolean }>(
+    'SELECT category_id AS "categoryId", item, by_user AS "byUser" FROM rules WHERE room_id = $1 AND key = $2',
     [roomId, key],
   );
   return rule ?? null;
@@ -691,8 +760,20 @@ export async function addFromText(app: App, room: Room, user: User, text: string
   if (quick) {
     const rule = quick.description ? await findRule(app, room.id, quick.description) : null;
     const categoryId = quick.description ? (rule?.categoryId ?? null) : (other?.id ?? null);
-    const item = await resolveItem(app, room.id, toItem(rule?.item, quick.description), quick.description);
-    const op = await insertOperation(app, period, user, quick.amount, quick.description || NO_DESCRIPTION, categoryId, item);
+    const item =
+      rule?.byUser && rule.item
+        ? displayName(rule.item)
+        : await resolveItem(app, room.id, toItem(rule?.item, quick.description), quick.description, categoryId);
+    const op = await insertOperation(
+      app,
+      period,
+      user,
+      quick.amount,
+      quick.description || NO_DESCRIPTION,
+      categoryId,
+      item,
+      Boolean(rule?.byUser),
+    );
     return categoryId === null ? { status: 'ok', ops: [op], pendingOpId: op.id } : { status: 'ok', ops: [op] };
   }
 
@@ -705,9 +786,22 @@ export async function addFromText(app: App, room: Room, user: User, text: string
     const category = categories.find((c) => c.name === found.category) ?? other;
     // выученное правило сильнее догадки модели
     const rule = await findRule(app, room.id, found.description);
-    const item = await resolveItem(app, room.id, toItem(rule?.item ?? found.item, found.description), found.description);
+    const categoryId = rule?.categoryId ?? category?.id ?? null;
+    const item =
+      rule?.byUser && rule.item
+        ? displayName(rule.item)
+        : await resolveItem(app, room.id, toItem(rule?.item ?? found.item, found.description), found.description, categoryId);
     ops.push(
-      await insertOperation(app, period, user, amount, found.description || NO_DESCRIPTION, rule?.categoryId ?? category?.id ?? null, item),
+      await insertOperation(
+        app,
+        period,
+        user,
+        amount,
+        found.description || NO_DESCRIPTION,
+        categoryId,
+        item,
+        Boolean(rule?.byUser),
+      ),
     );
     if (!rule && category && category !== other) await saveRule(app, room.id, found.description, category.id, item, false);
   }
@@ -725,8 +819,8 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   const category = guess ?? other;
   if (!category) return op;
   // временное название этой же траты (её описание) не должно перебить название от модели
-  const item = await resolveItem(app, op.roomId, toItem(answer?.item, op.description), op.description, op.id);
-  await app.db.query('UPDATE operations SET item = $1 WHERE id = $2', [item, opId]);
+  const item = await resolveItem(app, op.roomId, toItem(answer?.item, op.description), op.description, category.id, op.id);
+  await app.db.query('UPDATE operations SET item = $1 WHERE id = $2 AND NOT item_locked', [item, opId]);
   // пользователь мог успеть выбрать категорию сам, пока думала модель
   await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2 AND category_id IS NULL', [category.id, opId]);
   if (guess && guess !== other) await saveRule(app, op.roomId, op.description, guess.id, item, false);
@@ -734,24 +828,45 @@ export async function categorizePending(app: App, opId: number): Promise<Operati
   return getOperation(app, opId);
 }
 
-/** Исправление категории пользователем: запоминается правилом для таких же описаний. */
-export async function setCategory(app: App, op: Operation, categoryId: number): Promise<Operation | null> {
-  const [category] = await app.db.query('SELECT 1 FROM categories WHERE id = $1 AND room_id = $2', [categoryId, op.roomId]);
-  if (!category) return null;
-  await app.db.query('UPDATE operations SET category_id = $1 WHERE id = $2', [categoryId, op.id]);
-  await saveRule(app, op.roomId, op.description, categoryId, op.item, true);
-  notifyRoom(op.roomId);
-  return getOperation(app, op.id);
-}
-
 export const MAX_AMOUNT = 2_000_000_000;
 
-/** Исправление суммы (в копейках); null — сумма вне допустимого диапазона. */
-export async function setAmount(app: App, op: Operation, amount: number): Promise<Operation | null> {
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > MAX_AMOUNT) return null;
-  await app.db.query('UPDATE operations SET amount = $1 WHERE id = $2', [amount, op.id]);
+export interface OperationPatch {
+  amount?: number;
+  description?: string;
+  item?: string;
+  categoryId?: number;
+}
+
+/** Любые поля траты одним изменением; описание, позиция и категория запоминаются как правило пользователя. */
+export async function updateOperation(app: App, op: Operation, patch: OperationPatch): Promise<Operation | null> {
+  if (patch.amount !== undefined && (!Number.isSafeInteger(patch.amount) || patch.amount <= 0 || patch.amount > MAX_AMOUNT)) return null;
+  if (patch.categoryId !== undefined) {
+    if (!Number.isSafeInteger(patch.categoryId)) return null;
+    const [category] = await app.db.query('SELECT 1 FROM categories WHERE id = $1 AND room_id = $2', [patch.categoryId, op.roomId]);
+    if (!category) return null;
+  }
+  const description =
+    patch.description === undefined ? null : patch.description.replace(/\s+/g, ' ').trim().replace(/[.,;:!?…]+$/u, '').trim().slice(0, 200);
+  const item = patch.item === undefined ? null : displayName(patch.item);
+  if ((patch.description !== undefined && !description) || (patch.item !== undefined && !item)) return null;
+  const learned = patch.description !== undefined || patch.item !== undefined || patch.categoryId !== undefined;
+  await app.db.query(
+    `UPDATE operations SET amount = COALESCE($2, amount), description = COALESCE($3, description),
+       item = COALESCE($4, item), category_id = COALESCE($5, category_id), item_locked = item_locked OR $6 WHERE id = $1`,
+    [op.id, patch.amount ?? null, description, item, patch.categoryId ?? null, learned],
+  );
+  const updated = await getOperation(app, op.id);
+  if (learned && updated?.category) await saveRule(app, op.roomId, updated.description, updated.category.id, updated.item, true);
   notifyRoom(op.roomId);
-  return getOperation(app, op.id);
+  return updated;
+}
+
+export async function setCategory(app: App, op: Operation, categoryId: number): Promise<Operation | null> {
+  return updateOperation(app, op, { categoryId });
+}
+
+export async function setAmount(app: App, op: Operation, amount: number): Promise<Operation | null> {
+  return updateOperation(app, op, { amount });
 }
 
 /** Переносит трату в текущий период другого журнала; категория подбирается по тому же названию. */

@@ -1114,6 +1114,36 @@ input::placeholder {
   margin: -8px 0 12px;
 }
 
+.category-tools {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--fill);
+}
+
+.category-tools summary {
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.category-tools[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.category-tools[open] summary {
+  margin-bottom: 4px;
+}
+
+.category-tools input:not([type='checkbox']) {
+  background: var(--card);
+}
+
+.category-tools .hint {
+  padding: 0;
+}
+
 
 .update-banner {
   position: fixed;

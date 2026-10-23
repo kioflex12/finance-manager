@@ -155,6 +155,9 @@ export const api = {
   /** владелец удаляет комнату, участник выходит из неё */
   deleteRoom: (id: number) => call<{ activeRoomId: number; rooms: Room[] }>('DELETE', `/rooms/${id}`),
   clearOperations: (id: number) => call<unknown>('DELETE', `/rooms/${id}/operations`),
+  createCategory: (roomId: number, name: string) => call<{ category: Category }>('POST', `/rooms/${roomId}/categories`, { name }),
+  renameCategory: (roomId: number, categoryId: number, name: string) =>
+    call<{ category: Category }>('PATCH', `/rooms/${roomId}/categories/${categoryId}`, { name }),
   periods: (id: number) => call<{ periods: Period[] }>('GET', `/rooms/${id}/periods`),
   startPeriod: (id: number) => call<unknown>('POST', `/rooms/${id}/periods`),
   /** categoryId: undefined — все траты периода, null — без категории */
@@ -164,8 +167,8 @@ export const api = {
       `/rooms/${id}/operations?periodId=${periodId}${categoryId === undefined ? '' : `&categoryId=${categoryId ?? 'none'}`}`,
     ),
   add: (id: number, text: string) => call<Overview & { operations: Operation[] }>('POST', `/rooms/${id}/operations`, { text }),
-  /** amount — в копейках; можно менять сумму, категорию или всё сразу */
-  updateOperation: (opId: number, patch: { categoryId?: number; amount?: number }) =>
+  /** amount — в копейках; описание, позицию и категорию тоже можно менять одним запросом */
+  updateOperation: (opId: number, patch: { categoryId?: number; amount?: number; description?: string; item?: string }) =>
     call<{ operation: Operation }>('PATCH', `/operations/${opId}`, patch),
   remove: (opId: number) => call<unknown>('DELETE', `/operations/${opId}`),
 };

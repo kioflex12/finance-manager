@@ -1,5 +1,5 @@
 // Разовая пересборка позиций по смыслу во всех журналах: `node apps/server/dist/regroup.js`.
-// Обычно не нужна — новые позиции пересобираются сами; пригодится после смены правил группировки.
+// Запускается только вручную: автоматическая LLM-перегруппировка могла объединять разные траты.
 import { config } from './config.js';
 import { createLlmParser } from './core/llm.js';
 import { groupItemsByMeaning, regroupItems, type App } from './core/service.js';

@@ -10,7 +10,7 @@ const llm: ExpenseParser = {
   },
   async categorize(input) {
     const item = input.text.charAt(0).toUpperCase() + input.text.slice(1);
-    return { category: 'Развлечения', item };
+    return { category: 'Развлечения', item: modelItem ?? item };
   },
   async groupItems() {
     return merges;
@@ -18,12 +18,15 @@ const llm: ExpenseParser = {
 };
 
 let merges: { from: string; to: string }[] = [];
+let modelItem: string | undefined;
 
 let app: s.App;
 let user: s.User;
 let room: s.Room;
 
 beforeEach(async () => {
+  merges = [];
+  modelItem = undefined;
   app = { db: await openDb(), llm };
   user = await s.ensureUser(app, { id: 1, name: 'Костя' });
   room = await s.ensureActiveRoom(app, user);
@@ -57,17 +60,47 @@ describe('группировка по смыслу', () => {
     merges = [];
   });
 
-  it('новая позиция запускает пересборку журнала в фоне', async () => {
+  it('не запускает опасную LLM-перегруппировку после новой траты', async () => {
     await add('150 лимонад');
-    merges = [{ from: 'Лимонад', to: 'Напитки' }];
     await add('100 напитки');
-    await s.flushNewItems(app);
-    expect((await items()).map(([, item]) => item)).toEqual(['Напитки', 'Напитки']);
-    merges = [];
+    merges = [{ from: 'Лимонад', to: 'Напитки' }];
+    await add('200 такси');
+    expect((await items()).map(([, item]) => item)).toEqual(['Лимонад', 'Напитки', 'Такси']);
+  });
+
+  it('не переносит позицию в другую категорию даже при явной пересборке', async () => {
+    await add('100 напитки');
+    await add('300 мафия');
+    const operations = await s.listOperations(app, (await s.currentPeriod(app, room.id))!.id);
+    const drinks = operations.find((op) => op.description === 'напитки')!;
+    const cafe = (await s.listCategories(app, room.id)).find((c) => c.name === 'Кафе и рестораны')!;
+    await s.setCategory(app, drinks, cafe.id);
+    merges = [{ from: 'Мафия', to: 'Напитки' }];
+    expect(await s.groupItemsByMeaning(app, room.id)).toBe(0);
+    expect((await items()).map(([, item]) => item)).toEqual(['Напитки', 'Мафия']);
+  });
+
+  it('ручную подкатегорию автоматика не перезаписывает', async () => {
+    await add('100 такси');
+    await add('200 автобус');
+    const operations = await s.listOperations(app, (await s.currentPeriod(app, room.id))!.id);
+    const bus = operations.find((op) => op.description === 'автобус')!;
+    await s.updateOperation(app, bus, { item: 'Автобус' });
+    merges = [{ from: 'Автобус', to: 'Такси' }];
+    expect(await s.groupItemsByMeaning(app, room.id)).toBe(0);
+    expect((await items()).map(([, item]) => item)).toEqual(['Такси', 'Автобус']);
   });
 });
 
 describe('позиции собираются по общему признаку', () => {
+  it('точное однословное описание не подменяется ошибочным названием модели', async () => {
+    modelItem = 'Напитки';
+    await add('300 мафия');
+    modelItem = 'Такси';
+    await add('200 автобус');
+    expect((await items()).map(([, item]) => item)).toEqual(['Мафия', 'Автобус']);
+  });
+
   it('containedItem находит существующую позицию внутри описания, целыми словами', () => {
     expect(s.containedItem(['Мафия', 'Кофе'], 'капитанский стол мафия')).toBe('Мафия');
     expect(s.containedItem(['Мафия', 'Капитанский стол'], 'капитанский стол мафия')).toBe('Капитанский стол');

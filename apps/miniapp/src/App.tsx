@@ -42,6 +42,8 @@ const ERRORS: Record<string, string> = {
   no_period: 'Срок журнала закончился — начните новый период',
   unauthorized: 'Откройте приложение из Telegram',
   forbidden: 'Это может сделать только владелец журнала',
+  bad_category: 'Введите уникальное название категории',
+  bad_operation: 'Проверьте сумму, названия и категорию',
 };
 
 const DAY_MS = 86_400_000;
@@ -363,7 +365,14 @@ export function App() {
         />
       )}
       {editing && (
-        <EditSheet op={editing} categories={view.categories} onClose={() => setEditing(null)} onChanged={refresh} fail={fail} />
+        <EditSheet
+          op={editing}
+          roomId={room.id}
+          categories={view.categories}
+          onClose={() => setEditing(null)}
+          onChanged={refresh}
+          fail={fail}
+        />
       )}
       {error && <div className="toast">{error}</div>}
       {updateReady && busy && (
@@ -1139,47 +1148,110 @@ function AddSheet(props: {
   );
 }
 
-function EditSheet(props: { op: Operation; categories: Category[]; onClose: () => void; onChanged: () => void; fail: Fail }) {
+function EditSheet(props: {
+  op: Operation;
+  roomId: number;
+  categories: Category[];
+  onClose: () => void;
+  onChanged: () => void;
+  fail: Fail;
+}) {
   const { op } = props;
   const [amount, setAmount] = useState(String(op.amount / 100).replace('.', ','));
-  const act = (action: Promise<unknown>) => action.then(props.onChanged).catch(props.fail).finally(props.onClose);
+  const [description, setDescription] = useState(op.description);
+  const [item, setItem] = useState(op.item);
+  const [categoryId, setCategoryId] = useState(op.category?.id ?? 0);
+  const [categoryName, setCategoryName] = useState(op.category?.name ?? '');
+  const [newCategory, setNewCategory] = useState('');
+  const [busy, setBusy] = useState(false);
+  const selected = props.categories.find((c) => c.id === categoryId);
 
   // «1 250,5» → 125050 копеек; null — в поле не сумма
   const kopecks = Math.round(Number(amount.replace(/\s/g, '').replace(',', '.')) * 100);
-  const valid = Number.isSafeInteger(kopecks) && kopecks > 0;
-  const amountChanged = valid && kopecks !== op.amount;
+  const validAmount = Number.isSafeInteger(kopecks) && kopecks > 0;
+  const valid = validAmount && Boolean(description.trim() && item.trim() && (newCategory.trim() || (selected && categoryName.trim())));
 
-  function saveAmount(e: FormEvent) {
+  async function save(e: FormEvent) {
     e.preventDefault();
-    if (amountChanged) act(api.updateOperation(op.id, { amount: kopecks }));
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      let nextCategoryId = categoryId;
+      if (newCategory.trim()) {
+        nextCategoryId = (await api.createCategory(props.roomId, newCategory)).category.id;
+      } else if (selected && categoryName.trim() !== selected.name) {
+        await api.renameCategory(props.roomId, selected.id, categoryName);
+      }
+      await api.updateOperation(op.id, { amount: kopecks, description, item, categoryId: nextCategoryId });
+      tg?.HapticFeedback?.notificationOccurred('success');
+      props.onChanged();
+      props.onClose();
+    } catch (err) {
+      props.fail(err);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
-    <Sheet title={op.item} onClose={props.onClose}>
-      {!sameWords(op) && <p className="muted original">Вы написали: «{op.description}»</p>}
-      <form className="amount-form" onSubmit={saveAmount}>
+    <Sheet title="Изменить трату" onClose={props.onClose}>
+      <form className="form" onSubmit={save}>
         <label className="amount-field">
           <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d\s.,]/g, ''))} aria-label="Сумма" />
           <span>₽</span>
         </label>
-        {amountChanged && <button className="primary">Сохранить</button>}
+        {!validAmount && <p className="field-error">Введите сумму больше нуля</p>}
+        <label>
+          Название траты
+          <input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} placeholder="Например, автобус до работы" />
+        </label>
+        <label>
+          Подкатегория
+          <input value={item} onChange={(e) => setItem(e.target.value)} maxLength={60} placeholder="Например, Автобус" />
+        </label>
+        <div>
+          <div className="field-label">Категория</div>
+          <div className="chips">
+            {props.categories.map((c) => (
+              <button
+                type="button"
+                key={c.id}
+                className={c.id === categoryId && !newCategory.trim() ? 'chip active' : 'chip'}
+                onClick={() => {
+                  setCategoryId(c.id);
+                  setCategoryName(c.name);
+                  setNewCategory('');
+                }}
+              >
+                {c.emoji} {c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <details className="category-tools">
+          <summary>Создать или переименовать категорию</summary>
+          <label>
+            Новая категория
+            <input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} maxLength={60} placeholder="Необязательно" />
+          </label>
+          {selected && !newCategory.trim() && (
+            <label>
+              Название выбранной категории
+              <input value={categoryName} onChange={(e) => setCategoryName(e.target.value)} maxLength={60} />
+            </label>
+          )}
+          <p className="muted hint">Переименование применится ко всем тратам этой категории в журнале.</p>
+        </details>
+        <button className="primary" disabled={busy || !valid}>
+          {busy ? <span className="spinner light" /> : 'Сохранить'}
+        </button>
       </form>
-      {!valid && <p className="field-error">Введите сумму больше нуля</p>}
-      <p className="muted">Куда отнести? Запомню для таких же трат.</p>
-      <div className="chips">
-        {props.categories.map((c) => (
-          <button
-            key={c.id}
-            className={c.id === op.category?.id ? 'chip active' : 'chip'}
-            // если сумму уже поправили, сохраняем её вместе с категорией
-            onClick={() => act(api.updateOperation(op.id, { categoryId: c.id, ...(amountChanged ? { amount: kopecks } : {}) }))}
-          >
-            {c.emoji} {c.name}
-          </button>
-        ))}
-      </div>
       <div className="danger-zone">
-        <button className="link danger" onClick={() => act(api.remove(op.id))}>
+        <button
+          className="link danger"
+          disabled={busy}
+          onClick={() => api.remove(op.id).then(props.onChanged).catch(props.fail).finally(props.onClose)}
+        >
           Удалить трату
         </button>
       </div>

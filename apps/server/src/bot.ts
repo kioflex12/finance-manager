@@ -352,8 +352,6 @@ export function startJobs(app: s.App, bot: Bot, alert: Alert): NodeJS.Timeout {
     bot.api.sendMessage(chatId, text, { reply_markup: keyboard }).catch((err) => console.error('send failed', chatId, err));
 
   const tick = async () => {
-    // новые позиции, появившиеся за минуту, пересобираются по смыслу («Лимонад» → «Напитки»)
-    await s.flushNewItems(app);
     for (const closed of await s.closeDuePeriods(app)) {
       // пустой период — не повод писать человеку
       if (!closed.stats.count) continue;
