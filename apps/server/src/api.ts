@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { config } from './config.js';
 import { onRoomChange } from './core/events.js';
+import { notifyExpenseAdded } from './core/notify.js';
 import * as s from './core/service.js';
 import { periodLabel } from './core/text.js';
 
@@ -234,6 +235,8 @@ export function createApi(app: s.App): Hono<Env> {
     const ops = await Promise.all(
       result.ops.map(async (op) => (op.id === result.pendingOpId ? ((await s.categorizePending(app, op.id)) ?? op) : op)),
     );
+    // рассылаем остальным участникам в фоне — ответ миниаппа это не задерживает
+    void notifyExpenseAdded(app, room, c.get('user'), ops).catch((err) => console.error('expense notify failed', err));
     return c.json({ operations: ops, ...(await overview(room)) });
   });
 

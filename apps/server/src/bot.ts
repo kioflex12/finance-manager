@@ -2,6 +2,7 @@ import { Bot, HttpError, InlineKeyboard, type Context } from 'grammy';
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { config } from './config.js';
 import { formatMoney, quickParse } from './core/parse.js';
+import { notifyExpenseAdded } from './core/notify.js';
 import * as s from './core/service.js';
 import { checkDisk, type Alert } from './core/alerts.js';
 import type { Transcriber } from './core/stt.js';
@@ -127,17 +128,46 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
 
     const tail = await footer(ctx, room);
     const head = opts.heard ? `🎙 «${opts.heard}»\n` : '';
+    const recorded: s.Operation[] = [];
     for (const [i, op] of result.ops.entries()) {
       const last = i === result.ops.length - 1;
       const compose = (o: s.Operation) => `${i === 0 ? head : ''}${operationLine(o)}${last ? '\n' + tail : ''}`;
       const keyboard = await opKeyboard(ctx, op.id);
       const sent = await ctx.reply(compose(op), { reply_markup: keyboard });
+      let final = op;
       if (result.pendingOpId === op.id) {
         const done = await s.categorizePending(app, op.id);
         // null — трату успели отменить, пока подбиралась категория
-        if (done) await ctx.api.editMessageText(sent.chat.id, sent.message_id, compose(done), { reply_markup: keyboard });
+        if (done) {
+          await ctx.api.editMessageText(sent.chat.id, sent.message_id, compose(done), { reply_markup: keyboard });
+          final = done;
+        }
       }
+      recorded.push(final);
     }
+    await notifyExpenseAdded(app, room, user, recorded);
+    for (const op of recorded) await warnIfDuplicate(ctx, room, op);
+  }
+
+  /** Предупреждение о похожей свежей трате в журнале — два человека могли внести одну покупку дважды. */
+  async function warnIfDuplicate(ctx: Context, room: s.Room, op: s.Operation): Promise<void> {
+    const [dup] = await s.findDuplicates(app, op);
+    if (!dup) return;
+    const offset = room.tzOffsetMin * 60_000;
+    const local = new Date(dup.createdAt.getTime() + offset);
+    const time = local.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+    const sameDay = local.toDateString() === new Date(Date.now() + offset).toDateString();
+    const when = sameDay
+      ? `сегодня в ${time}`
+      : `в ${time} (${local.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' })})`;
+    await ctx.reply(
+      `⚠️ Похоже на дубль: ${dup.userName} уже записал «${dup.item}» — ${formatMoney(dup.amount)} ${when}.\nЕсли это одна и та же покупка — удали свою запись:`,
+      {
+        reply_markup: new InlineKeyboard()
+          .text('↩️ Это дубль — удалить', `del:${op.id}`)
+          .text('✅ Не дубль', `ok:${op.id}`),
+      },
+    );
   }
 
   bot.command('start', async (ctx) => {
@@ -314,6 +344,12 @@ export function createBot(app: s.App, transcribe: Transcriber | null): Bot {
     await s.deleteOperation(app, op.id);
     await ctx.editMessageText(`↩️ Отменено: ${formatMoney(op.amount)} · ${op.item}`);
     await ctx.answerCallbackQuery();
+  });
+
+  // «Не дубль» в предупреждении: просто убираем кнопки, запись остаётся
+  bot.callbackQuery(/^ok:(\d+)$/, async (ctx) => {
+    await ctx.editMessageReplyMarkup();
+    await ctx.answerCallbackQuery({ text: 'Хорошо, оставляю запись' });
   });
 
   bot.callbackQuery(/^room:(\d+)$/, async (ctx) => {

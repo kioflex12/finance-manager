@@ -520,6 +520,46 @@ export async function listOperations(app: App, periodId: number, categoryId?: nu
   return rows.map(toOperation);
 }
 
+/** Насколько свежие траты могут быть одной покупкой: слова («вода»/«воды») ловим по общей основе. */
+const DUP_WINDOW_MS = DAY;
+const DUP_CLOSE_MS = 3_600_000;
+
+function wordStems(text: string): Set<string> {
+  return new Set(
+    itemWords(text)
+      .filter((w) => w.length >= 4)
+      .map((w) => (w.length > 4 ? w.slice(0, -2) : w.slice(0, -1))),
+  );
+}
+
+/**
+ * Похожа ли трата b на дубль траты a: та же сумма в том же журнале не позже чем за сутки, плюс
+ * совпадает описание, значимое слово, позиция — или категория, если записи сделаны почти одновременно
+ * (два человека вносят общую покупку с разными словами: «напитки 300» и «вода 300»).
+ */
+export function looksLikeDuplicate(a: Operation, b: Operation): boolean {
+  if (a.id === b.id || a.roomId !== b.roomId || a.amount !== b.amount) return false;
+  const diffMs = Math.abs(a.createdAt.getTime() - b.createdAt.getTime());
+  if (diffMs > DUP_WINDOW_MS) return false;
+  const keyA = ruleKey(a.description);
+  if (keyA && keyA === ruleKey(b.description)) return true;
+  const stemsB = wordStems(b.description);
+  if ([...wordStems(a.description)].some((w) => stemsB.has(w))) return true;
+  if (ruleKey(a.item) && ruleKey(a.item) === ruleKey(b.item)) return true;
+  return Boolean(a.category && b.category && a.category.id === b.category.id && diffMs <= DUP_CLOSE_MS);
+}
+
+/** Свежие траты журнала, похожие на эту, — для предупреждения о возможном дубле. */
+export async function findDuplicates(app: App, op: Operation): Promise<Operation[]> {
+  const rows = await app.db.query<OperationRow>(
+    `SELECT ${OPERATION} FROM ${OPERATION_FROM}
+     WHERE o.room_id = $1 AND o.id <> $2 AND o.amount = $3 AND o.created_at > $4
+     ORDER BY o.id DESC LIMIT 20`,
+    [op.roomId, op.id, op.amount, new Date(op.createdAt.getTime() - DUP_WINDOW_MS)],
+  );
+  return rows.map(toOperation).filter((other) => looksLikeDuplicate(op, other));
+}
+
 async function insertOperation(
   app: App,
   period: Period,
